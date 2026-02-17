@@ -49,6 +49,10 @@ results/
 benchmark_*.json
 benchmark_*.md
 
+# Telegram session files (contain auth credentials)
+*.session
+*.session-journal
+
 # Logs
 *.log
 logs/
