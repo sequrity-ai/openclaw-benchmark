@@ -1,4 +1,29 @@
-"""File manipulation benchmark scenario."""
+"""File manipulation benchmark scenario.
+
+Tasks (9):
+    Easy:
+       - Task 1 (File Organization): Create user directories and profile.txt files from data.json
+       - Task 2 (File Modification): Count action items from notes and update profile.txt files
+       - Task 3 (File Consolidation): Aggregate profile data into users_summary.csv
+
+    Medium:
+       - Task 4 (Recursive File Search): Find all .log files and create log_summary.txt
+       - Task 5 (Data Transformation): Transform sales_data.csv to sales_report.json with aggregations
+       - Task 6 (File Comparison): Compare config_v1.ini and config_v2.ini, create config_diff.txt
+
+    Hard:
+       - Task 7 (Multi-Step Data Pipeline): Merge employees.csv, departments.json, projects.xml into department_report.json
+       - Task 8 (Advanced Log Analysis): Parse application.log and generate log_analysis.json with error statistics
+       - Task 9 (Data Validation Report): Validate inventory.csv data quality and create validation_report.json
+
+Setup:
+    Creates test workspace at /tmp/openclaw_benchmark/ with structured data files
+    including JSON, CSV, XML, INI, and log files. All files are created fresh on
+    each run and removed during cleanup.
+
+Required Skills:
+    None (built-in file system tools)
+"""
 
 import logging
 

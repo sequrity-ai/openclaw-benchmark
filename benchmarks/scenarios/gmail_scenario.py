@@ -3,23 +3,39 @@
 Architecture:
     This scenario uses TWO separate Gmail accounts for realistic testing:
 
-    1. Bot's Gmail Account (e.g., openclaw-bot@gmail.com):
-       - Configured in OpenClaw via the `gmail` skill
-       - Bot reads emails sent to this account
-       - Bot sends emails from this account
+    1. Bot's Gmail Account: Configured in OpenClaw via the `gog` skill.
+       The bot reads, sends, and manages emails using this account.
 
-    2. Benchmark Gmail Account (e.g., openclaw-benchmark@gmail.com):
-       - Separate Gmail account with OAuth2 credentials
-       - Benchmark sends test emails FROM this account TO the bot
-       - Benchmark receives test emails FROM the bot
-       - Used to validate bot's email operations
+    2. Benchmark Gmail Account: A separate account with OAuth2 credentials
+       used by the benchmark harness to send test emails and validate results.
 
-    Task Flow:
-       - Task 1 (Search): Benchmark sends email to bot → bot searches its inbox
-       - Task 2 (Send): Bot sends email to benchmark → validate in benchmark's inbox
-       - Task 3 (Parse): Benchmark sends email to bot → bot extracts data
+Tasks (9):
+    Easy:
+       - Task 1 (Email Search): Find the most recent '[BENCHMARK TEST] Project Alpha Updates' email
+       - Task 2 (Email Send): Send a test email to the benchmark address
+       - Task 3 (Email Data Extraction): Find '[BENCHMARK TEST] Invoice' email and extract the amount
 
-    This two-account design mirrors real-world email communication between parties.
+    Medium:
+       - Task 4 (Count Unread): How many unread emails do I have?
+       - Task 5 (Search by Sender): Find emails from support@example.com
+       - Task 6 (Label Management): Create a label called 'Important Projects'
+
+    Hard:
+       - Task 7 (Email with Attachment): Find emails with PDF attachments from last week
+       - Task 8 (Draft Email): Draft an email to team@example.com about Q1 results
+       - Task 9 (Email Summary): Summarize the last 5 emails in my inbox
+
+Setup:
+    Sends 3 benchmark test emails to the bot's inbox (project update, invoice, newsletter)
+    so that Tasks 1 and 3 have real data to find. Cleanup closes seeded issues/emails.
+
+Required Skills:
+    gog (Gmail skill)
+
+Config:
+    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN — bot's Gmail OAuth
+    GMAIL_BENCHMARK_EMAIL — benchmark account address (sends/receives test emails)
+    GMAIL_BOT_EMAIL — bot's Gmail address
 """
 
 import logging

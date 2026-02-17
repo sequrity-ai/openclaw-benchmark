@@ -265,7 +265,12 @@ def _print_suite_header(config, scenarios, skipped, args):
         print(f"   Tasks ({len(scenario.tasks)}):")
         for j, task in enumerate(scenario.tasks, 1):
             difficulty = task.metadata.get("difficulty", "unknown").upper()
+            # Truncate long prompts for display
+            prompt_preview = task.prompt[:100].replace("\n", " ")
+            if len(task.prompt) > 100:
+                prompt_preview += "..."
             print(f"      {j}. {task.name} [{difficulty}]")
+            print(f"         {prompt_preview}")
 
     print(f"\n{'='*60}\n")
 

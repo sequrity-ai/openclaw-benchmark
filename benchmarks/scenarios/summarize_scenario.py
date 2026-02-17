@@ -1,19 +1,28 @@
 """Summarize benchmark scenario.
 
-Architecture:
-    This scenario tests the bot's ability to summarize content from various sources
-    using the steipete/summarize skill. No API keys required.
+Tasks (9):
+    Easy:
+       - Task 1 (URL Summary): Summarize the Python Wikipedia article
+       - Task 2 (YouTube Summary): Summarize the 'Python in 100 Seconds' YouTube video
+       - Task 3 (Comparison Summary): Compare and summarize two articles about Python
 
-    Task Flow:
-       - Task 1: Summarize a web article
-       - Task 2: Summarize a YouTube video
-       - Task 3: Compare summaries from multiple sources
-       - Task 4 (Medium): Executive Summary - Create executive summary of a business article
-       - Task 5 (Medium): Technical Abstract - Summarize a technical document focusing on key concepts
-       - Task 6 (Medium): Comparative Summary - Compare two articles on same topic
-       - Task 7 (Hard): Multi-Level Summary - Provide 1-sentence, 1-paragraph, and detailed summaries
-       - Task 8 (Hard): Q&A Generation - Generate questions and answers from an article
-       - Task 9 (Hard): Sentiment Analysis Summary - Summarize with sentiment analysis
+    Medium:
+       - Task 4 (Executive Summary): Read business_report.txt and write an executive summary
+       - Task 5 (Technical Abstract): Read technical_paper.txt and write a technical abstract
+       - Task 6 (Comparative Summary): Read two AI in healthcare articles and compare them
+
+    Hard:
+       - Task 7 (Multi-Level Summary): Read quantum_computing.txt and provide three levels of summary
+       - Task 8 (Q&A Generation): Read renewable_energy.txt and generate a Q&A study guide
+       - Task 9 (Sentiment Analysis Summary): Read social_media_impact.txt and include sentiment analysis
+
+Setup:
+    Creates local documents at /tmp/openclaw_benchmark/documents/ including business
+    reports, technical papers, and articles. Documents are uploaded to the bot workspace
+    for tasks 4-9.
+
+Required Skills:
+    steipete/summarize
 """
 
 import logging

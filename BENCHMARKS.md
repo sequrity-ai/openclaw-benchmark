@@ -1,478 +1,375 @@
 # OpenClaw Benchmark Suite
 
-Comprehensive benchmarks for evaluating OpenClaw bot capabilities across file manipulation, web research, calendar management, and email handling.
+Comprehensive benchmarks for evaluating OpenClaw bot capabilities across file manipulation, web research, weather, email, content summarization, GitHub operations, and multi-skill compound tasks.
 
 ## Overview
 
 The benchmark suite tests **accuracy** and **latency** of OpenClaw agents across real-world use cases. Each scenario includes:
 
-- **Pre-checks**: Verify agent configuration before testing
-- **Setup**: Prepare test environment (create files, send emails, etc.)
-- **Tasks**: 3 progressive tasks per scenario
-- **Validation**: Automatic accuracy scoring (0-100%)
-- **Cleanup**: Remove test data after completion
+- **Pre-checks**: Verify agent configuration and required skills before testing
+- **Setup**: Prepare test environment (create files, seed data, send emails, etc.)
+- **Tasks**: 9 progressive tasks per scenario (Easy → Medium → Hard)
+- **Validation**: Automatic accuracy scoring (0% or 100% per task)
+- **Cleanup**: Remove all test data after completion
+
+## Running Benchmarks
+
+```bash
+# Run all scenarios
+just bench all
+
+# Run a single scenario
+just bench file
+just bench weather
+just bench web
+just bench summarize
+just bench gmail
+just bench github
+just bench compound
+
+# Save results to JSON
+just bench all output=results.json
+```
 
 ## Available Scenarios
 
 ### 1. File Manipulation (`file`)
 
-Tests agent's ability to create, read, transform, and extract data from files.
+Tests the agent's ability to create, read, transform, and extract data from files on the remote workspace.
 
-**Required Skills**: `file_system_access`, `text_processing`, `data_transformation`
+**Required Skills**: None (built-in file system tools)
 
-**Tasks**:
-1. **File Creation** (Low difficulty, 20s timeout)
-   - Create `summary.md` with bullet list of 3 programming languages
-   - Validation: Checks for markdown format and all 3 items
-
-2. **JSON to CSV Transformation** (Medium difficulty, 30s timeout)
-   - Read `data.json` and create CSV with names and emails
-   - Validation: Correct columns, matching records, proper CSV format
-
-3. **Text Extraction** (Medium difficulty, 25s timeout)
-   - Extract action items from meeting notes
-   - Validation: Correct action items, excludes non-action text
-
-**Setup**: Creates test workspace at `/tmp/openclaw_benchmark/` with:
-- `data.json`: Sample user records
-- `notes.txt`: Meeting notes with action items
-- `reports/`: Empty directory for outputs
-
-### 2. Web Research (`web`)
-
-Tests agent's ability to browse web pages, extract information, and cite sources.
-
-**Required Skills**: `web_browsing`, `information_extraction`, `research`
+**Setup**: Creates test workspace at `/tmp/openclaw_benchmark/` with structured data files including JSON, CSV, XML, log files, and configuration files.
 
 **Tasks**:
-1. **Factual Extraction** (Low difficulty, 40s timeout)
-   - Extract Python's creation year and creator from Wikipedia
-   - Validation: Contains founding date (1991) and creator info
 
-2. **Repository Analysis** (Medium difficulty, 50s timeout)
-   - Analyze GitHub repository and describe its purpose
-   - Validation: Identifies repo, describes purpose, includes metadata
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | File Organization | Easy | Create user directories and profile.txt files from data.json |
+| 2 | File Modification | Easy | Count action items from notes and update profile.txt files |
+| 3 | File Consolidation | Easy | Aggregate profile data into users_summary.csv |
+| 4 | Recursive File Search | Medium | Find all .log files and create log_summary.txt |
+| 5 | Data Transformation | Medium | Transform sales_data.csv to sales_report.json with aggregations |
+| 6 | File Comparison | Medium | Compare config_v1.ini and config_v2.ini, create config_diff.txt |
+| 7 | Multi-Step Data Pipeline | Hard | Merge employees.csv, departments.json, and projects.xml into department_report.json |
+| 8 | Advanced Log Analysis | Hard | Parse application.log and generate log_analysis.json with error statistics |
+| 9 | Data Validation Report | Hard | Validate inventory.csv data quality and create validation_report.json |
 
-3. **Multi-Source Research** (Medium difficulty, 60s timeout)
-   - Research "OpenClaw features" and provide 3 capabilities with sources
-   - Validation: 3 distinct capabilities, 3 source URLs
+---
 
-**Setup**: Prepares test URLs:
-- Wikipedia: Python programming language article
-- GitHub: awesome-openclaw-usecases repository
-- Topic: OpenClaw AI agent features
+### 2. Weather (`weather`)
 
-### 3. Calendar Management (`calendar`) [Coming Soon]
+Tests the agent's ability to retrieve, interpret, and reason about weather data.
 
-Tests agent's ability to create events, detect conflicts, and summarize schedules.
+**Required Skills**: `steipete/weather`
 
-### 4. Email Handling (`email`) [Coming Soon]
+**Setup**: No special setup required.
 
-Tests agent's ability to read, classify, and draft email responses.
+**Tasks**:
 
-## Usage
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | Current Weather | Easy | What's the current weather in San Francisco? |
+| 2 | Weather Forecast | Easy | Get the weather forecast for New York for the next 3 days |
+| 3 | Weather Comparison | Easy | Compare current weather in London vs Tokyo — which is warmer? |
+| 4 | Multi-City Weather | Medium | Tell me the current weather in Paris, Berlin, and Rome |
+| 5 | Weather Alerts | Medium | Are there any weather alerts or warnings for Miami? |
+| 6 | Temperature Trend | Medium | What's the temperature trend for Seattle over the next week? |
+| 7 | Travel Weather Planning | Hard | I'm planning a trip to Barcelona next week — what should I pack? |
+| 8 | Best Weather Day | Hard | Which of the next 5 days in Chicago is best for outdoor activities? |
+| 9 | Severe Weather Risk | Hard | Is there any risk of severe weather in Houston this weekend? |
 
-### Run All Scenarios
+---
 
-```bash
-# Async mode (recommended for production)
-uv run openclaw-tg benchmark-suite <chat_id> --scenario all
+### 3. Web Search (`web`)
 
-# Sync mode (better for debugging)
-uv run openclaw-tg --sync benchmark-suite <chat_id> --scenario all
-```
+Tests the agent's ability to search the web, extract information, and synthesize results.
 
-### Run Specific Scenario
+**Required Skills**: `tavily-search`
 
-```bash
-# File manipulation only
-uv run openclaw-tg benchmark-suite <chat_id> --scenario file
+**Setup**: No special setup required.
 
-# Web research only
-uv run openclaw-tg benchmark-suite <chat_id> --scenario web
-```
+**Tasks**:
 
-### Skip Setup Phase
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | Factual Web Search | Easy | When was Python created and who created it? |
+| 2 | Comparison Research | Easy | Compare Python vs JavaScript — give 3 key differences |
+| 3 | Current Events Research | Easy | Find recent developments in artificial intelligence |
+| 4 | Multi-Query Search | Medium | Search for both 'Python async programming' and 'FastAPI tutorials' |
+| 5 | Domain-Specific Search | Medium | Find recent articles about AI on techcrunch.com |
+| 6 | News Search | Medium | What are the latest news about climate change? |
+| 7 | Time-Filtered Search | Hard | Find articles about OpenAI published in the last week |
+| 8 | Search Comparison | Hard | Search for 'React' vs 'Vue' and tell me which has more results |
+| 9 | Topic Analysis | Hard | Search for 'machine learning' and summarize the main topics |
 
-```bash
-# Use existing test data (for repeated runs)
-uv run openclaw-tg benchmark-suite <chat_id> --scenario file --no-setup
-```
+---
 
-### Export Results
+### 4. Summarize (`summarize`)
 
-```bash
-# Save results to JSON file
-uv run openclaw-tg benchmark-suite <chat_id> --scenario all --output results.json
-```
+Tests the agent's ability to read and summarize URLs, YouTube videos, and local documents.
 
-### Verbose Logging
+**Required Skills**: `steipete/summarize`
 
-```bash
-# Enable detailed logging for debugging
-uv run openclaw-tg -v benchmark-suite <chat_id> --scenario file
-```
+**Setup**: Creates local documents at `/tmp/openclaw_benchmark/documents/` including business reports, technical papers, and articles.
 
-## Getting Started
+**Tasks**:
 
-### 1. Set Up Your Bot
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | URL Summary | Easy | Summarize the Python Wikipedia article |
+| 2 | YouTube Summary | Easy | Summarize the 'Python in 100 Seconds' YouTube video |
+| 3 | Comparison Summary | Easy | Compare and summarize two articles about Python |
+| 4 | Executive Summary | Medium | Read business_report.txt and write an executive summary |
+| 5 | Technical Abstract | Medium | Read technical_paper.txt and write a technical abstract |
+| 6 | Comparative Summary | Medium | Read two AI in healthcare articles and compare them |
+| 7 | Multi-Level Summary | Hard | Read quantum_computing.txt and provide three levels of summary |
+| 8 | Q&A Generation | Hard | Read renewable_energy.txt and generate a Q&A study guide |
+| 9 | Sentiment Analysis Summary | Hard | Read social_media_impact.txt and include sentiment analysis in summary |
 
-Make sure your `.env` file is configured:
+---
 
-```bash
-TELEGRAM_BOT_TOKEN=your_token_here
-OPENCLAW_BOT_USERNAME=your_bot_username
-ASYNC_MODE=true
-```
+### 5. Gmail (`gmail`)
 
-### 2. Get Your Chat ID
+Tests the agent's ability to search, read, send, and manage emails via Gmail.
 
-Start a conversation with your bot on Telegram, then:
+**Required Skills**: `gog` (Gmail skill)
 
-```bash
-uv run python -c "
-import asyncio
-from config import load_config
-from telegram_client import TelegramClient
+**Setup**: Sends 3 benchmark test emails to the configured inbox (project update, invoice, and newsletter) to ensure tasks have real data to work with.
 
-async def main():
-    config = load_config()
-    config.async_mode = True
-    async with TelegramClient(config) as client:
-        updates = await client.get_updates_async()
-        for update in updates:
-            if update.message:
-                print(f'Chat ID: {update.message.chat_id}')
+**Tasks**:
 
-asyncio.run(main())
-"
-```
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | Email Search | Easy | Find the most recent email with subject '[BENCHMARK TEST] Project Alpha Updates' |
+| 2 | Email Send | Easy | Send a test email to the benchmark address |
+| 3 | Email Data Extraction | Easy | Find the most recent '[BENCHMARK TEST] Invoice' email and extract the amount |
+| 4 | Count Unread | Medium | How many unread emails do I have? |
+| 5 | Search by Sender | Medium | Find emails from support@example.com |
+| 6 | Label Management | Medium | Create a label called 'Important Projects' |
+| 7 | Email with Attachment | Hard | Find emails with PDF attachments from last week |
+| 8 | Draft Email | Hard | Draft an email to team@example.com about Q1 results |
+| 9 | Email Summary | Hard | Summarize the last 5 emails in my inbox |
 
-### 3. Configure Your Agent
+**Setup Requirements**:
+- `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN` — bot's Gmail OAuth credentials
+- `GMAIL_BENCHMARK_EMAIL` — email address for sending test emails and validation
+- `GMAIL_BOT_EMAIL` — bot's Gmail address
 
-Ensure your OpenClaw bot has the required skills for each scenario:
+---
 
-**For File Scenario:**
-- File system access enabled
-- Write permissions to `/tmp/`
+### 6. GitHub (`github`)
 
-**For Web Scenario:**
-- Web browsing skill installed
-- Internet connectivity
+Tests the agent's ability to interact with GitHub repositories, issues, pull requests, and releases.
 
-### 4. Run Benchmarks
+**Required Skills**: `steipete/github`
 
-```bash
-# Start with file scenario (simplest)
-uv run openclaw-tg benchmark-suite <your_chat_id> --scenario file
+**Setup**: Seeds the test repository with real data via the GitHub API:
+- 5 JavaScript source files committed to main branch (`src/utils.js`, `src/api.js`, `src/index.js`, `README.md`, `package.json`)
+- 1 feature branch (`feature/benchmark-pr-branch`) with an additional commit
+- 1 open pull request: "[BENCHMARK] Add error handler feature"
+- 1 release tagged `v1.0.0-benchmark`
 
-# Then try web research
-uv run openclaw-tg benchmark-suite <your_chat_id> --scenario web
+All seeded data is removed during cleanup.
 
-# Finally run all scenarios
-uv run openclaw-tg benchmark-suite <your_chat_id> --scenario all --output full_results.json
-```
+**Tasks**:
+
+| # | Name | Difficulty | Prompt |
+|---|------|-----------|--------|
+| 1 | Issue Creation | Easy | Create a new issue titled '[BENCHMARK TEST] Test Issue' |
+| 2 | List Issues | Easy | List all open issues and show their titles |
+| 3 | Repository Info | Easy | Get the repo description, star count, and fork count |
+| 4 | Recent Commits | Medium | Show the last 5 commits with messages and authors |
+| 5 | Pull Request List | Medium | List all open pull requests |
+| 6 | Issue Labels | Medium | What labels are available in the repository? |
+| 7 | Contributor Stats | Hard | Who are the top 3 contributors by commit count? |
+| 8 | File Contents | Hard | Get the contents of `src/utils.js` — what functions does it define? |
+| 9 | Release Info | Hard | What was the latest release and when was it published? |
+
+**Setup Requirements**:
+- `GITHUB_TOKEN` — personal access token with `repo` scope for the benchmark account
+- `GITHUB_TEST_REPO_OWNER` — owner of the test repository
+- `GITHUB_TEST_REPO_NAME` — name of the test repository
+
+---
+
+### 7. Compound (`compound`)
+
+Tests the agent's ability to chain multiple skills together in a single task. Each task requires 2–3 skills to be used in sequence, where the output of one feeds into the next.
+
+**Required Skills**: `steipete/weather`, `tavily-search`, `steipete/github`, `steipete/summarize`
+
+**Setup**: Uses the same GitHub test repository as the GitHub scenario. No additional local files needed. GitHub issues created during tasks are left open for inspection after the run.
+
+**Tasks**:
+
+| # | Name | Difficulty | Skills | Prompt |
+|---|------|-----------|--------|--------|
+| 1 | Weather + Web Research | Easy | weather + tavily | Check weather in Tokyo, then search for travel tips and packing recommendations |
+| 2 | Web Search + Summarize | Easy | tavily + summarize | Search for a Python async article, then summarize the key points |
+| 3 | GitHub + Summarize | Easy | github + summarize | Read `src/utils.js` from the repo, then summarize its purpose and functions |
+| 4 | Weather + GitHub Issue | Medium | weather + github | Check weather in London, file a GitHub issue reporting the conditions |
+| 5 | Web Research + GitHub Issue | Medium | tavily + github | Research async programming best practices, file a GitHub issue with findings |
+| 6 | Multi-City Weather + Context | Medium | weather + tavily | Compare weather in London, Tokyo, and Paris with web context |
+| 7 | GitHub Repo + Web Research | Hard | github + tavily | Get repo info then research the technology stack online |
+| 8 | Web + Weather + GitHub Chain | Hard | tavily + weather + github | Search AI news, check weather, file a GitHub issue combining both |
+| 9 | Research + Summarize + GitHub | Hard | tavily + summarize + github | Research ML in healthcare, summarize findings, file GitHub issue with summary |
+
+**Setup Requirements**:
+- `GITHUB_TOKEN` — personal access token with `repo` scope
+- `GITHUB_TEST_REPO_OWNER` — owner of the test repository
+- `GITHUB_TEST_REPO_NAME` — name of the test repository
+
+---
 
 ## Understanding Results
 
 ### Console Output
 
+At the start of each run, all scenarios and their tasks are printed with prompts:
+
 ```
 ============================================================
 OpenClaw Benchmark Suite
-Running 2 scenario(s): File Manipulation, Web Research
-Mode: Async
-Skip setup: False
+Mode: async
+Running 6 scenario(s): File Manipulation, Weather, ...
 ============================================================
 
-[1/2] Running scenario: File Manipulation
-Description: Tests agent's ability to create, read, transform, and extract data from files
-Required skills: file_system_access, text_processing, data_transformation
+Scenarios to run:
 
-Running health checks...
-Running setup...
-Running task 1/3: File Creation
-Task completed: success=True, accuracy=100.0, latency=15.23s
-...
+1. GitHub
+   Description: Tests agent's ability to interact with GitHub repos, issues, and PRs
+   Required skills: steipete/github
+   Tasks (9):
+      1. Issue Creation [EASY]
+         Create a new issue in the repository owner/repo with the title '[BENCHMARK TEST]...
+      2. List Issues [EASY]
+         List all open issues in the repository owner/repo. Show me the issue titles.
+      ...
 
+============================================================
+```
+
+After each scenario completes:
+
+```
 ------------------------------------------------------------
-Scenario: File Manipulation
-Duration: 78.45s
-Tasks passed: 3/3
-Average accuracy: 95.7%
-Average latency: 23.15s
+Scenario: GitHub
+Duration: 458.23s
+Tasks passed: 9/9
+Average accuracy: 100.0%
+Average latency: 51.03s
 ------------------------------------------------------------
 ```
 
-### JSON Export Format
+### JSON Export
+
+```bash
+just bench all output=results.json
+```
 
 ```json
 {
-  "config": {
-    "async_mode": true,
-    "openclaw_bot_username": "your_bot"
-  },
   "scenarios": [
     {
-      "scenario_name": "File Manipulation",
-      "total_duration": 78.45,
+      "scenario_name": "GitHub",
+      "total_duration": 458.23,
       "all_tasks_passed": true,
-      "average_accuracy": 95.7,
-      "average_latency": 23.15,
+      "average_accuracy": 100.0,
+      "average_latency": 51.03,
       "task_results": [
         {
-          "task_name": "File Creation",
+          "task_name": "Issue Creation",
           "success": true,
-          "latency": 15.23,
+          "latency": 47.01,
           "accuracy_score": 100.0,
-          "validation_details": {...}
+          "conversation_turns": 2,
+          "completion_reason": "goal_achieved"
         }
       ]
     }
   ],
   "summary": {
-    "total_scenarios": 2,
-    "total_tasks": 6,
-    "tasks_passed": 5,
-    "overall_accuracy": 87.3
+    "total_scenarios": 6,
+    "total_tasks": 54,
+    "tasks_passed": 50,
+    "overall_accuracy": 92.6
   }
 }
 ```
 
-## Metrics
+### Scoring
 
-### Accuracy Score (0-100%)
+Each task is scored **binary**: 100% (pass) or 0% (fail). Validation checks:
+- Presence of required keywords in bot response
+- Absence of "no data" / error phrases for tasks that require real data
+- Specific content matches (e.g., file names, issue titles)
 
-Each task receives an accuracy score based on:
-- **Correctness**: Did the agent produce the right output?
-- **Completeness**: Are all required elements present?
-- **Format**: Is the output in the expected format?
+**Multi-turn conversations**: Each task allows up to 10 turns. The AI agent guides the conversation and signals completion when the goal is achieved.
 
-**Scoring Guidelines**:
-- **90-100%**: Excellent - All requirements met
-- **70-89%**: Good - Minor issues or missing elements
-- **50-69%**: Fair - Significant gaps in output
-- **0-49%**: Poor - Major errors or incomplete
-
-### Latency (seconds)
-
-Time from sending prompt to receiving complete response.
-
-**Target Latencies**:
-- Simple tasks (file creation): < 20s
-- Medium tasks (data transformation): < 30s
-- Complex tasks (multi-source research): < 60s
-
-### Success Rate
-
-Binary pass/fail based on minimum accuracy threshold (typically 70%).
-
-## Troubleshooting
-
-### "No response from bot or timeout"
-
-**Causes**:
-- Bot is not responding
-- Task timeout too short
-- Bot lacks required skills
-
-**Solutions**:
-- Test bot connection: `uv run openclaw-tg test`
-- Increase timeouts in scenario code
-- Verify required skills are installed
-- Use sync mode for debugging: `--sync`
-
-### "Validation error" or Low Accuracy Scores
-
-**Causes**:
-- Bot output doesn't match expected format
-- Bot misunderstood the task
-- Validation logic too strict
-
-**Solutions**:
-- Review `validation_details` in JSON output
-- Check bot's actual response text
-- Adjust validation criteria if needed
-- Use verbose logging: `-v`
-
-### "Setup failed"
-
-**Causes**:
-- Insufficient permissions
-- Missing directories
-- Network issues (for web scenario)
-
-**Solutions**:
-- Check file permissions for `/tmp/`
-- Verify internet connectivity
-- Review setup logs with `-v`
-
-### File Scenario Failures
-
-**Common Issues**:
-- Bot can't access `/tmp/openclaw_benchmark/`
-- Bot doesn't understand markdown format
-- Bot includes extra content beyond requirements
-
-**Debug**:
-```bash
-# Check workspace manually
-ls -la /tmp/openclaw_benchmark/
-
-# Run with verbose logging
-uv run openclaw-tg -v --sync benchmark-suite <chat_id> --scenario file
-```
-
-### Web Scenario Failures
-
-**Common Issues**:
-- Web browsing skill not installed
-- Bot can't access URLs
-- Bot doesn't extract correct information
-
-**Debug**:
-- Verify URLs are accessible: `curl -I https://en.wikipedia.org/...`
-- Check bot has web browsing capability
-- Review actual bot response in validation details
-
-## Extending Benchmarks
-
-### Creating Custom Scenarios
-
-1. **Define Scenario Class**:
-
-```python
-from benchmarks.base import ScenarioBase, BenchmarkTask
-
-class MyScenario(ScenarioBase):
-    def __init__(self):
-        super().__init__(
-            name="My Custom Scenario",
-            description="Tests custom capability",
-            required_skills=["skill1", "skill2"]
-        )
-        self._define_tasks()
-
-    def _define_tasks(self):
-        self.add_task(BenchmarkTask(
-            name="Task 1",
-            prompt="Do something",
-            expected_output_description="Expected result",
-            validation_fn=self.validator.validate_task1,
-            timeout=30.0
-        ))
-
-    def pre_check(self):
-        # Return list of HealthCheckResult
-        pass
-
-    def setup(self):
-        # Return SetupResult
-        pass
-
-    def cleanup(self):
-        # Return bool
-        pass
-```
-
-2. **Create Validator**:
-
-```python
-from benchmarks.base import TaskResult
-
-class MyValidator:
-    @staticmethod
-    def validate_task1(response: str, setup_data: dict) -> TaskResult:
-        # Check response and assign accuracy score
-        return TaskResult(
-            task_name="Task 1",
-            prompt="...",
-            success=True,
-            latency=0.0,
-            accuracy_score=95.0,
-            response_text=response
-        )
-```
-
-3. **Add to CLI**:
-
-Update `cli.py` to import and include your scenario:
-
-```python
-from benchmarks.scenarios import FileScenario, WebScenario, MyScenario
-
-# In run_benchmark_suite_async:
-if args.scenario == "my":
-    scenarios.append(MyScenario())
-```
-
-## Best Practices
-
-### For Agent Testing
-
-1. **Start Simple**: Run file scenario first (no external dependencies)
-2. **Iterate**: Run benchmarks after agent configuration changes
-3. **Compare**: Track accuracy over time to measure improvements
-4. **Debug**: Use sync mode (`--sync`) and verbose logging (`-v`) for failures
-
-### For Benchmark Development
-
-1. **Clear Prompts**: Make task instructions unambiguous
-2. **Flexible Validation**: Allow for reasonable variations in output
-3. **Incremental Difficulty**: Order tasks from easy to hard
-4. **Real-World Tasks**: Base scenarios on actual use cases
-
-### For Performance Analysis
-
-1. **Consistent Environment**: Use same bot configuration for comparisons
-2. **Multiple Runs**: Average results over 3-5 runs for reliability
-3. **Export Data**: Save JSON results for long-term tracking
-4. **Identify Patterns**: Look for consistent failure points
+---
 
 ## Architecture
 
 ```
 benchmarks/
-├── base.py                 # Core classes (ScenarioBase, TaskResult, etc.)
+├── base.py                      # Core classes (ScenarioBase, BenchmarkTask, TaskResult)
+├── ai_agent.py                  # Multi-turn conversation AI agent
+├── skill_checker.py             # Skill availability detection
+├── scenario_factory.py          # Scenario instantiation with config
+├── remote_workspace.py          # SSH-based remote file validation
 ├── scenarios/
-│   ├── file_scenario.py    # File manipulation tests
-│   └── web_scenario.py     # Web research tests
+│   ├── file_scenario.py         # File manipulation (9 tasks)
+│   ├── weather_scenario.py      # Weather queries (9 tasks)
+│   ├── web_scenario.py          # Web search (9 tasks)
+│   ├── summarize_scenario.py    # Content summarization (9 tasks)
+│   ├── gmail_scenario.py        # Gmail operations (9 tasks)
+│   ├── github_scenario.py       # GitHub operations (9 tasks)
+│   └── compound_scenario.py     # Multi-skill compound tasks (9 tasks)
 ├── setup/
-│   ├── file_setup.py       # Create test files
-│   └── web_setup.py        # Prepare test URLs
+│   ├── file_setup.py            # Create test workspace files
+│   ├── gmail_setup.py           # Send benchmark emails
+│   └── github_setup.py          # Seed/cleanup GitHub repo data
 └── validators/
-    ├── file_validator.py   # Validate file tasks
-    └── web_validator.py    # Validate web tasks
+    ├── file_validator.py        # Validate file task outputs
+    ├── weather_validator.py     # Validate weather responses
+    ├── web_validator.py         # Validate web search results
+    ├── summarize_validator.py   # Validate summaries
+    ├── gmail_validator.py       # Validate Gmail task outputs
+    ├── github_validator.py      # Validate GitHub task outputs
+    └── compound_validator.py    # Validate compound multi-skill outputs
 ```
 
-## Roadmap
+---
 
-- [x] File manipulation scenario
-- [x] Web research scenario
-- [ ] Calendar management scenario
-- [ ] Email handling scenario
-- [ ] Accuracy percentile analysis (p50, p95, p99)
-- [ ] Automated regression testing in CI
-- [ ] Benchmark result visualization dashboard
-- [ ] Multi-agent collaboration scenarios
+## Troubleshooting
 
-## Contributing
+### Bot not responding / timeout
+- Verify bot is running and the required skill is installed
+- Check `OPENCLAW_BOT_USERNAME` in `.env`
+- Increase `CONVERSATION_TIMEOUT` if tasks are slow
 
-To add new benchmark scenarios:
+### Scenario skipped (missing skills)
+- In local mode: install the required skill on your local OpenClaw instance
+- In Telegram mode: skill detection is skipped — all scenarios run regardless
 
-1. Create scenario class in `benchmarks/scenarios/`
-2. Create setup utilities in `benchmarks/setup/`
-3. Create validators in `benchmarks/validators/`
-4. Update CLI to include new scenario
-5. Document tasks and validation criteria
-6. Add tests for validation logic
+### GitHub seeding failures
+- Ensure `GITHUB_TOKEN` has `repo` scope
+- Ensure the test repo exists and is accessible with the token
+- Check if a previous run's cleanup failed (stale branch/PR/release may block re-seeding)
+
+### Gmail setup failures
+- Refresh token may be expired — re-run `uv run python tools/get_gmail_token.py`
+- Ensure `GMAIL_BENCHMARK_EMAIL` is set and can receive mail
+
+### File scenario failures (remote mode)
+- SSH credentials must be configured: `BOT_SSH_KEY_PATH` or `BOT_SSH_PASSWORD`
+- The bot workspace path must match `BOT_WORKSPACE_PATH`
+
+---
 
 ## Related Documentation
 
-- [README.md](README.md) - Main project documentation
-- [QUICKSTART.md](QUICKSTART.md) - Quick start guide
-- [.env.example](.env.example) - Configuration options
-
-## License
-
-Part of the Sequrity project.
+- [README.md](README.md) — Main project documentation
+- [QUICKSTART.md](QUICKSTART.md) — Quick start guide
+- [.env.example](.env.example) — All configuration options

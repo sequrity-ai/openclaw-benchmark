@@ -1,13 +1,26 @@
 """Weather benchmark scenario.
 
-Architecture:
-    This scenario tests the bot's ability to retrieve weather information
-    using the steipete/weather skill. No API keys required.
+Tasks (9):
+    Easy:
+       - Task 1 (Current Weather): What's the current weather in San Francisco?
+       - Task 2 (Weather Forecast): Get the weather forecast for New York for the next 3 days
+       - Task 3 (Weather Comparison): Compare current weather in London vs Tokyo — which is warmer?
 
-    Task Flow:
-       - Task 1: Get current weather for a specific city
-       - Task 2: Get weather forecast for multiple days
-       - Task 3: Compare weather between two cities
+    Medium:
+       - Task 4 (Multi-City Weather): Tell me the current weather in Paris, Berlin, and Rome
+       - Task 5 (Weather Alerts): Are there any weather alerts or warnings for Miami?
+       - Task 6 (Temperature Trend): What's the temperature trend for Seattle over the next week?
+
+    Hard:
+       - Task 7 (Travel Weather Planning): I'm planning a trip to Barcelona next week — what should I pack?
+       - Task 8 (Best Weather Day): Which of the next 5 days in Chicago is best for outdoor activities?
+       - Task 9 (Severe Weather Risk): Is there any risk of severe weather in Houston this weekend?
+
+Setup:
+    No special setup required. Tasks use real-time weather data.
+
+Required Skills:
+    steipete/weather
 """
 
 import logging

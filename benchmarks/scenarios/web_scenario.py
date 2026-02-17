@@ -1,16 +1,26 @@
 """Web Search benchmark scenario.
 
-Architecture:
-    This scenario tests the bot's ability to search the web for information
-    using the Tavily search skill. Tasks progress from simple factual queries
-    to complex comparative research.
+Tasks (9):
+    Easy:
+       - Task 1 (Factual Web Search): When was Python created and who created it?
+       - Task 2 (Comparison Research): Compare Python vs JavaScript — give 3 key differences
+       - Task 3 (Current Events Research): Find recent developments in artificial intelligence
 
-    Task Flow:
-       - Task 1 (Factual Search): Search for well-known facts and report them
-       - Task 2 (Comparison): Compare two technologies/concepts with key differences
-       - Task 3 (Current Events): Research current events or recent developments
+    Medium:
+       - Task 4 (Multi-Query Search): Search for both 'Python async programming' and 'FastAPI tutorials'
+       - Task 5 (Domain-Specific Search): Find recent articles about AI on techcrunch.com
+       - Task 6 (News Search): What are the latest news about climate change?
 
-    This design tests both search accuracy and information extraction capabilities.
+    Hard:
+       - Task 7 (Time-Filtered Search): Find articles about OpenAI published in the last week
+       - Task 8 (Search Comparison): Search for 'React' vs 'Vue' and tell me which has more results
+       - Task 9 (Topic Analysis): Search for 'machine learning' and summarize the main topics
+
+Setup:
+    No special setup required. Tasks use live web search.
+
+Required Skills:
+    tavily-search
 """
 
 import logging

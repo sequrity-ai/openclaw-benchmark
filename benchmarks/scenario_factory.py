@@ -99,6 +99,7 @@ def create_scenario(
 def _register_all_scenarios():
     """Register all known scenarios with their configurations."""
     from benchmarks.scenarios import (
+        CompoundScenario,
         FileScenario,
         GmailScenario,
         GitHubScenario,
@@ -170,6 +171,20 @@ def _register_all_scenarios():
         ScenarioConfig(
             scenario_class=SummarizeScenario,
             requires_remote_manager=True,
+        ),
+    )
+
+    # Compound scenario - chains multiple skills; uses GitHub API for issue tasks
+    register_scenario(
+        "compound",
+        ScenarioConfig(
+            scenario_class=CompoundScenario,
+            requires_remote_manager=False,
+            config_keys={
+                "github_token": "github_token",
+                "test_repo_owner": "github_test_repo_owner",
+                "test_repo_name": "github_test_repo_name",
+            },
         ),
     )
 

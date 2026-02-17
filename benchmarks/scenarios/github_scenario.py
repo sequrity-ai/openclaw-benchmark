@@ -1,16 +1,41 @@
 """GitHub benchmark scenario.
 
 Architecture:
-    This scenario uses a test GitHub repository for benchmark validation.
+    Uses a dedicated test repository seeded with real data via the GitHub API.
+    The benchmark account token seeds the repo before tasks run and cleans it
+    up afterward. The bot's GitHub skill interacts with the same repo.
 
-    Similar to Gmail, this requires:
-    1. Bot's GitHub Account: Configured in OpenClaw via steipete/github skill
-    2. Benchmark GitHub Account: With personal access token for validation
+Tasks (9):
+    Easy:
+       - Task 1 (Issue Creation): Create a new issue titled '[BENCHMARK TEST] Test Issue'
+       - Task 2 (List Issues): List all open issues and show their titles
+       - Task 3 (Repository Info): Get the repo description, star count, and fork count
 
-    Task Flow:
-       - Task 1: Create a test issue
-       - Task 2: List open issues
-       - Task 3: Get repository information
+    Medium:
+       - Task 4 (Recent Commits): Show the last 5 commits with messages and authors
+       - Task 5 (Pull Request List): List all open pull requests
+       - Task 6 (Issue Labels): What labels are available in the repository?
+
+    Hard:
+       - Task 7 (Contributor Stats): Who are the top 3 contributors by commit count?
+       - Task 8 (File Contents): Get the contents of src/utils.js — what functions does it define?
+       - Task 9 (Release Info): What was the latest release and when was it published?
+
+Setup:
+    Seeds the test repo via GitHub API with:
+    - 5 JS source files on main branch (5 commits)
+    - 1 feature branch with 1 additional commit
+    - 1 open pull request: '[BENCHMARK] Add error handler feature'
+    - 1 release tagged v1.0.0-benchmark
+    All seeded data is removed during cleanup.
+
+Required Skills:
+    steipete/github
+
+Config:
+    GITHUB_TOKEN — personal access token with repo scope
+    GITHUB_TEST_REPO_OWNER — owner of the test repository
+    GITHUB_TEST_REPO_NAME — name of the test repository
 """
 
 import logging

@@ -44,22 +44,28 @@ auth-reset:
     @echo "✓ Authentication reset. Run 'just auth' to re-authenticate."
 
 # Run benchmark scenario (setup is automatic)
+# Scenarios: file, weather, web, summarize, gmail, github, compound, all
 # Usage: just bench file                    (Telegram mode with remote validation, default)
 #        just bench file --mode local       (Local mode)
 #        just bench all --mode telegram     (All scenarios)
+#        just bench compound               (Multi-skill compound scenario)
+# Logs are automatically saved to logs/bench_<scenario>_<timestamp>.log
 bench scenario="file" mode="telegram" output="":
     #!/usr/bin/env bash
+    mkdir -p logs
+    log_file="logs/bench_{{scenario}}_$(date +%Y%m%d_%H%M%S).log"
+    echo "Logging to $log_file"
     if [ "{{mode}}" = "local" ]; then
         if [ -z "{{output}}" ]; then
-            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}}
+            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} 2>&1 | tee "$log_file"
         else
-            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} --output {{output}}
+            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} --output {{output}} 2>&1 | tee "$log_file"
         fi
     elif [ "{{mode}}" = "telegram" ]; then
         if [ -z "{{output}}" ]; then
-            uv run python cli.py --async benchmark-suite --scenario {{scenario}}
+            uv run python cli.py --async benchmark-suite --scenario {{scenario}} 2>&1 | tee "$log_file"
         else
-            uv run python cli.py --async benchmark-suite --scenario {{scenario}} --output {{output}}
+            uv run python cli.py --async benchmark-suite --scenario {{scenario}} --output {{output}} 2>&1 | tee "$log_file"
         fi
     else
         echo "Error: mode must be 'local' or 'telegram'"
@@ -86,6 +92,10 @@ evaluate results="benchmark_results.json":
         (.scenarios[] | "  - \(.scenario_name): \(.task_results | map(select(.success)) | length)/\(.task_results | length) tasks passed, \(.average_accuracy | round)% accuracy")
     ' {{results}}
 
+# List recent benchmark log files
+logs:
+    @ls -lt logs/bench_*.log 2>/dev/null | head -20 || echo "No log files found in logs/"
+
 # Clean up test artifacts
 clean:
     rm -rf .pytest_cache
@@ -96,12 +106,17 @@ clean:
     find . -type f -name "*.pyc" -delete
     rm -f benchmark_*.json benchmark_*.md *_results.json *_results.md
 
+# Clean up benchmark logs
+clean-logs:
+    rm -rf logs/
+    @echo "✓ Benchmark logs removed."
+
 # Clean up benchmark workspace
 clean-workspace:
     rm -rf /tmp/openclaw_benchmark
 
-# Full clean (includes dependencies)
-clean-all: clean clean-workspace
+# Full clean (includes dependencies and logs)
+clean-all: clean clean-workspace clean-logs
     rm -rf .venv
     rm -rf uv.lock
 
@@ -122,8 +137,15 @@ info:
     @echo ""
     @echo "Quick commands:"
     @echo "  just bench file              - Run file benchmark (Telegram + remote validation)"
-    @echo "  just bench file --mode local - Run file benchmark (local mode)"
+    @echo "  just bench weather           - Run weather benchmark"
+    @echo "  just bench web               - Run web search benchmark"
+    @echo "  just bench summarize         - Run summarize benchmark"
+    @echo "  just bench gmail             - Run Gmail benchmark"
+    @echo "  just bench github            - Run GitHub benchmark"
+    @echo "  just bench compound          - Run compound multi-skill benchmark"
     @echo "  just bench all               - Run all benchmarks"
+    @echo "  just bench file --mode local - Run file benchmark (local mode)"
+    @echo "  just logs                    - List recent run logs (logs/bench_*.log)"
     @echo "  just evaluate results.json   - Evaluate benchmark results"
     @echo "  just auth                    - Authenticate with Telegram"
     @echo ""
