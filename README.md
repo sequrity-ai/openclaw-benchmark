@@ -1,492 +1,458 @@
-# OpenClaw Telegram Benchmark Client
+# OpenClaw Benchmark Client
 
-A multi-turn conversation benchmark framework for testing OpenClaw bot performance with AI-driven user simulation.
+A multi-turn conversation benchmarking framework for testing OpenClaw bot performance. An AI agent simulates a real user, conducts natural multi-turn conversations with the bot to accomplish tasks, and measures success rate, accuracy, and latency.
 
-## Features
+## How It Works
 
-- **Multi-turn Conversations**: AI agent conducts natural dialogues with the bot to accomplish tasks
-- **Dual-mode Support**: Local OpenClaw CLI or remote Telegram bot testing
-- **AI-Powered User Simulation**: Uses OpenAI models via Pydantic AI to simulate realistic user behavior
-- **Comprehensive Metrics**: Tracks conversation turns, latency, success rate, and full conversation history
-- **File Manipulation Testing**: Benchmarks file creation, transformation, and data extraction capabilities
-- **Async-first Architecture**: Built for performance with async/await throughout
+Each benchmark task works like this:
 
-## Quick Start
+1. An **AI agent** (powered by OpenAI) receives a task description
+2. The agent sends messages to the **OpenClaw bot** (via Telegram or local CLI)
+3. The agent and bot exchange messages until the task is complete (up to 10 turns)
+4. A **validator** checks whether the task was actually completed correctly
+5. Results are collected: turns taken, latency, success/fail, accuracy score
 
-See [QUICKSTART.md](QUICKSTART.md) for a quick reference guide.
+---
+
+## Two Modes
+
+The framework supports two operating modes. Choose based on what you are testing.
+
+### Telegram Mode (default)
+
+The benchmark acts as a real Telegram user and messages your deployed OpenClaw bot. This tests the full production stack including Telegram round-trips.
+
+- Uses Pyrogram user-based client (your personal account, not a bot token)
+- Requires one-time Telegram authentication (`just auth`)
+- Requires SSH credentials to the bot server for file-based validation
+- Slower due to network latency (~30s per bot response)
+
+**Use this when:** testing a real deployed bot, running sweeps across all models, or doing production-level validation.
+
+### Local Mode
+
+The benchmark calls `openclaw agent` directly as a subprocess. No Telegram involved.
+
+- Calls the local OpenClaw CLI: `openclaw agent --message "..." --json`
+- No Telegram auth required
+- Full filesystem access — validators can inspect created files directly
+- Much faster (~2-5s per response)
+
+**Use this when:** developing new scenarios, rapid iteration, or running quick smoke tests.
+
+---
+
+## Prerequisites
+
+- Python 3.13+
+- [`uv`](https://docs.astral.sh/uv/) package manager
+- An OpenAI API key (required — the AI agent that simulates users runs on OpenAI)
+- For Telegram mode: credentials from [my.telegram.org](https://my.telegram.org) and SSH access to the bot server
+- For local mode: `openclaw` CLI installed and on `$PATH`
+
+---
 
 ## Installation
 
-1. Install dependencies using `uv`:
-
 ```bash
+# Clone and enter the project
 cd opencalw-sandbox
 
-# Sync dependencies (creates virtual environment automatically)
+# Install dependencies (creates .venv automatically)
 uv sync
 
-# Or with dev dependencies
-uv sync --group dev
-```
-
-2. Set up your environment:
-
-```bash
+# Copy and fill in your config
 cp .env.example .env
-# Edit .env with your API keys and configuration
 ```
+
+---
 
 ## Configuration
 
-Create a `.env` file with the following settings:
+All configuration lives in `.env`. Here is what you need depending on what you want to run.
 
-### Required Configuration
-
-```bash
-# ===== AI Agent (REQUIRED for multi-turn conversations) =====
-OPENAI_API_KEY=your_openai_api_key_here
-AI_AGENT_MODEL=gpt-4o-mini
-
-# ===== Mode Selection =====
-ASYNC_MODE=true  # Optional - true for async (faster), false for sync
-LOCAL_MODE=false  # false for Telegram, true for local CLI
-
-# ===== Telegram Client API (Required for Telegram mode) =====
-TELEGRAM_API_ID=your_api_id_from_my_telegram_org
-TELEGRAM_API_HASH=your_api_hash_from_my_telegram_org
-TELEGRAM_PHONE=+1234567890
-OPENCLAW_BOT_USERNAME=your_bot_username
-```
-
-### Optional Configuration
+### Always Required
 
 ```bash
-# ===== Conversation Settings =====
-MAX_CONVERSATION_TURNS=10
-CONVERSATION_TIMEOUT=300.0
-
-# ===== Logging =====
-LOG_LEVEL=INFO
-DEBUG_MODE=false
-```
-
-## Usage
-
-### Using `just` (Recommended)
-
-```bash
-# List available commands
-just
-
-# Authenticate with Telegram (one-time setup for Telegram mode)
-just auth
-
-# Run file benchmark (local mode)
-just bench-file
-
-# Run file benchmark (Telegram mode)
-just bench-file-telegram
-
-# Run all benchmarks with output
-just bench-all-save results.json --telegram
-just bench-all-save results.json --local
-
-# Run smoke test
-just smoke
-```
-
-### Using CLI Directly
-
-```bash
-# List available scenarios
-uv run python cli.py --local list-scenarios
-
-# Run file scenario (local mode, async for better performance)
-uv run python cli.py --async --local benchmark-suite --scenario file
-
-# Run file scenario (local mode, sync)
-uv run python cli.py --local benchmark-suite --scenario file
-
-# Run file scenario (Telegram mode, async)
-uv run python cli.py --async benchmark-suite --scenario file
-
-# Run file scenario (Telegram mode, sync)
-uv run python cli.py benchmark-suite --scenario file
-
-# Save results to file
-uv run python cli.py --async benchmark-suite --scenario file --output results.json
-```
-
-## Architecture
-
-### Multi-turn Conversation Flow
-
-```
-┌──────────────┐
-│   User/CLI   │
-└──────┬───────┘
-       │
-       ├─→ Creates BenchmarkAgent (OpenAI-powered)
-       │
-       ├─→ For each task:
-       │   ┌───────────────────────────────────────┐
-       │   │ AI Agent conducts conversation:       │
-       │   │   Turn 1: Agent → Bot                 │
-       │   │          Bot → Agent                  │
-       │   │   Turn 2: Agent → Bot (based on Turn 1)
-       │   │          Bot → Agent                  │
-       │   │   ...                                 │
-       │   │   Turn N: Task completion detected    │
-       │   └───────────────────────────────────────┘
-       │
-       ├─→ Validates final bot response
-       │
-       └─→ Records:
-           - Conversation turns (2-10 per task)
-           - Full conversation history
-           - Completion reason (goal_achieved/max_turns/timeout/error)
-           - Total latency
-           - Accuracy score
-```
-
-### Core Components
-
-1. **benchmarks/ai_agent.py**: Pydantic AI agent for user simulation
-   - `BenchmarkAgent`: Conducts multi-turn conversations
-   - `ConversationResult`: Tracks conversation outcome
-   - `ConversationTurn`: Individual message exchange
-
-2. **benchmarks/base.py**: Benchmark framework
-   - `ScenarioBase`: Abstract base for benchmark scenarios
-   - `TaskResult`: Extended with conversation tracking
-   - `BenchmarkTask`: Task definitions with validation
-
-3. **benchmarks/scenarios/file_scenario.py**: File manipulation tests
-   - File creation, CSV transformation, text extraction
-   - Validates actual file system state
-
-4. **cli.py**: Command-line interface
-   - Creates AI agent with OpenAI API
-   - Manages Telegram/local client
-   - Exports results
-
-5. **telegram_client.py**: Pyrogram-based Telegram client
-   - User-based API (not bot API)
-   - Async message handling
-   - Response waiting with timeout
-
-## Validation Approach
-
-### Success Rate Determination
-
-The benchmark uses a **two-phase validation approach**:
-
-#### Phase 1: AI Agent Goal Detection (Conversation-level)
-- The AI agent determines if the conversation successfully accomplished the task goal
-- Based on bot responses and task completion indicators
-- Marks conversation as `goal_achieved`, `max_turns`, `timeout`, or `error`
-- **This only validates that the conversation appeared successful**
-
-#### Phase 2: Task Validation Function (Accuracy-level)
-- Each task has a validation function that checks the **actual result**
-- **For local mode**: Validates files directly on local filesystem
-- **For Telegram/remote mode**: MANUAL validation required on bot-side
-
-### Remote vs Local Validation
-
-**Local Mode** (`LOCAL_MODE=true`):
-- ✅ Full automated validation
-- Validates actual file creation, content, format
-- Checks filesystem state directly
-- Example: Verifies `/tmp/openclaw_benchmark/languages.md` exists and contains 3 languages
-
-**Telegram/Remote Mode** (`LOCAL_MODE=false`):
-- ⚠️ **Manual validation required on bot-side**
-- AI agent can only verify conversation success
-- **You must manually check files on the remote bot server**
-- File validators currently check local paths (not applicable for remote)
-
-### Current Limitation
-
-When running in Telegram mode:
-1. The AI agent conducts the conversation successfully ✅
-2. The bot confirms task completion ✅
-3. **But files are created on the REMOTE bot server** 🔴
-4. **The benchmark cannot automatically validate remote files** 🔴
-
-### Success Rate Interpretation
-
-- **`success`**: Conversation completed AND validation passed
-- **`accuracy_score`**: 0-100% based on validation criteria
-- **For Telegram mode**: Both will be `False`/`0%` because validation can't access remote files
-- **For Local mode**: Both reflect actual task completion
-
-### Future Enhancement
-
-To enable automated remote validation:
-- Option 1: Bot exposes validation endpoints (e.g., `/benchmark_validate`)
-- Option 2: Bot returns file contents in responses for validation
-- Option 3: SSH-based remote file access (requires credentials)
-
-## Benchmark Scenarios
-
-The benchmark suite includes 6 scenarios, each testing different capabilities. All scenarios use **EASY** difficulty tasks for baseline capability assessment.
-
-### 1. File Manipulation
-
-Tests the bot's ability to create, read, transform, and extract data from files.
-
-**Required Skills**: None (core tools only)
-
-**Tasks:**
-1. **File Creation** - Create a markdown file with a bullet list of 3 programming languages
-2. **JSON to CSV Transformation** - Convert JSON data to CSV format with specific columns
-3. **Text Extraction and Reporting** - Extract action items from notes and save to a file
-
-**Validation**: Local filesystem checks (file existence, content, format)
-
----
-
-### 2. Gmail Operations
-
-Tests the bot's ability to send, read, and search emails.
-
-**Required Skills**: `clawhub install gog`
-
-**Setup Requirements**:
-- Bot's Gmail account configured in OpenClaw
-- Benchmark Gmail account with OAuth2 credentials (see `.env.example`)
-
-**Tasks:**
-1. **Send Email** - Compose and send an email to specified recipient
-2. **Read Email** - Find and read specific email from inbox
-3. **Search Email** - Search for emails matching criteria
-
-**Validation**: Checks actual Gmail API for sent emails and inbox state
-
----
-
-### 3. Web Search
-
-Tests the bot's ability to search the web and retrieve information.
-
-**Required Skills**: `clawhub install steipete/tavily`
-
-**Setup Requirements**: Tavily API key (see `.env.example`)
-
-**Tasks:**
-1. **Simple Search** - Search for current information (e.g., "Who won the 2024 Super Bowl?")
-2. **Fact Retrieval** - Find specific factual information
-3. **Comparison** - Compare information from multiple sources
-
-**Validation**: Checks response contains relevant keywords and information
-
----
-
-### 4. Weather Information
-
-Tests the bot's ability to retrieve and report weather data.
-
-**Required Skills**: `clawhub install steipete/weather`
-
-**Setup Requirements**: None (weather skill handles API access)
-
-**Tasks:**
-1. **Current Weather** - Get current weather for a specific city
-2. **Weather Forecast** - Get multi-day weather forecast
-3. **Weather Comparison** - Compare weather between two cities
-
-**Validation**: Checks response contains city name and weather-related keywords
-
----
-
-### 5. Content Summarization
-
-Tests the bot's ability to summarize web pages, videos, and documents.
-
-**Required Skills**: `clawhub install steipete/summarize`
-
-**Setup Requirements**: None (summarize skill handles content fetching)
-
-**Tasks:**
-1. **URL Summary** - Summarize a web page (e.g., Wikipedia article)
-2. **YouTube Summary** - Summarize a YouTube video
-3. **Comparison Summary** - Compare content from two sources
-
-**Validation**: Checks response contains summary keywords and sufficient content
-
----
-
-### 6. GitHub Operations
-
-Tests the bot's ability to interact with GitHub repositories, issues, and pull requests.
-
-**Required Skills**: `clawhub install steipete/github`
-
-**Setup Requirements**:
-- Bot's GitHub account configured in OpenClaw
-- Benchmark GitHub account with personal access token (see `.env.example`)
-- Test repository for issue creation/management
-
-**Tasks:**
-1. **Issue Creation** - Create a new issue in test repository
-2. **List Issues** - List all open issues in repository
-3. **Repository Info** - Get repository metadata (description, stars, forks)
-
-**Validation**: Checks actual GitHub API for created issues and repository data
-
-## Example Results
-
-```
-============================================================
-OpenClaw Benchmark Suite
-Mode: async
-Running 1 scenario(s): File Manipulation
-============================================================
-
-Multi-turn mode: max 10 turns, 300.0s timeout, model gpt-4o-mini
-
-[1/1] Running scenario: File Manipulation
-Description: Tests agent's ability to create, read, transform, and extract data from files
-
-Task 1: File Creation - ✅ 2 turns, 10.13s, goal_achieved
-Task 2: JSON to CSV   - ✅ 4 turns, 23.60s, goal_achieved
-Task 3: Text Extract  - ✅ 6 turns, 35.50s, goal_achieved
-
-------------------------------------------------------------
-Scenario: File Manipulation
-Duration: 69.24s
-Average latency: 23.08s per task
-------------------------------------------------------------
-```
-
-## AI Agent System Prompt
-
-The AI agent is instructed to:
-1. Send clear, concise messages to the bot
-2. Follow the bot's instructions and respond appropriately
-3. Ask clarifying questions if needed
-4. Acknowledge when the task is complete
-5. Be patient and helpful
-
-The agent adapts its strategy based on bot responses and can conduct up to 10 turns per task.
-
-## Testing
-
-Run tests with uv:
-
-```bash
-# All tests
-uv run pytest
-
-# Verbose output
-uv run pytest -v
-
-# With coverage
-uv run pytest --cov=. --cov-report=html
-```
-
-## Troubleshooting
-
-### Missing OpenAI API Key
-
-```
-ERROR: OPENAI_API_KEY is required for multi-turn conversations.
-Please set OPENAI_API_KEY in your .env file.
-```
-
-**Solution**: Add your OpenAI API key to `.env`:
-```bash
+# AI agent that simulates the user in conversations (required for all modes)
 OPENAI_API_KEY=sk-proj-...
+AI_AGENT_MODEL=gpt-5-mini
 ```
 
-### Performance Considerations
-
-For best performance, use async mode with `--async` flag or set `ASYNC_MODE=true` in `.env`. Sync mode is also supported but may be slower as it uses `asyncio.run()` internally to wrap async operations.
-
-### Telegram Authentication
-
-For Telegram mode, you need to authenticate once:
+### Telegram Mode
 
 ```bash
+LOCAL_MODE=false
+
+# Get these from https://my.telegram.org → API development tools
+TELEGRAM_API_ID=12345678
+TELEGRAM_API_HASH=abcdef1234567890abcdef1234567890
+TELEGRAM_PHONE=+1234567890        # Your personal phone number with country code
+
+# The bot's username (without @)
+OPENCLAW_BOT_USERNAME=your_openclaw_bot
+
+# SSH access to the bot server (required for file/summarize validation)
+BOT_SSH_HOST=your-bot-server.example.com
+BOT_SSH_PORT=22
+BOT_SSH_USER=ubuntu
+BOT_SSH_KEY_PATH=~/.ssh/id_rsa
+BOT_WORKSPACE_PATH=/tmp/openclaw_benchmark
+```
+
+### Local Mode
+
+```bash
+LOCAL_MODE=true
+AGENT_ID=main    # The openclaw agent name (default: main)
+```
+
+### Optional Performance Tuning
+
+```bash
+ASYNC_MODE=true               # true = async (faster, default); false = sync (easier to debug)
+MAX_CONVERSATION_TURNS=10     # Max turns per task before giving up
+CONVERSATION_TIMEOUT=300.0    # Seconds per task before timeout
+TIMEOUT_MULTIPLIER=1.0        # Scale all timeouts (use >1 on slow machines)
+```
+
+### Scenario-Specific Config
+
+Only needed if you run those specific scenarios.
+
+```bash
+# Web search scenario
+TAVILY_API_KEY=tvly-...
+
+# Gmail scenario — requires TWO Gmail accounts
+# Account 1: the bot's Gmail (configured in OpenClaw via clawhub install gog)
+# Account 2: a separate benchmark account for sending test emails and validating
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REFRESH_TOKEN=...
+GMAIL_BENCHMARK_EMAIL=benchmark@gmail.com   # Account 2 (with OAuth2 credentials)
+GMAIL_BOT_EMAIL=bot@gmail.com               # Account 1 (bot's account)
+
+# GitHub scenario — requires TWO GitHub accounts
+# Account 1: the bot's GitHub (configured in OpenClaw via clawhub install steipete/github)
+# Account 2: a separate benchmark account with a test repo
+GITHUB_TOKEN=ghp_...                        # PAT for account 2, "repo" scope
+GITHUB_TEST_REPO_OWNER=your-github-username
+GITHUB_TEST_REPO_NAME=openclaw-benchmark-test
+```
+
+### Logging
+
+```bash
+LOG_LEVEL=INFO      # DEBUG | INFO | WARNING | ERROR
+DEBUG_MODE=false    # true = very verbose output
+```
+
+---
+
+## Quick Start
+
+### Local Mode (fastest, no auth needed)
+
+```bash
+# Run a single scenario
+just bench file mode=local
+just bench weather mode=local
+just bench web mode=local
+
+# Run all scenarios
+just bench all mode=local
+
+# Run a sweep across all configured models
+just sweep mode=local
+```
+
+### Telegram Mode
+
+```bash
+# One-time: authenticate with Telegram
 just auth
-# Or:
-uv run python telegram_auth.py
+
+# Run a single scenario
+just bench file
+just bench weather
+just bench all
+
+# Run sweep across all available models on the remote bot
+just sweep
+just sweep output=sweep_results.json
 ```
 
-This will:
-1. Ask for your phone number
-2. Send you a verification code
-3. Save the session for future use
+---
 
-### Connection Errors
+## All Commands
 
-- Verify your API credentials are correct
-- Check internet connectivity
-- For Telegram: Ensure you've completed authentication
-
-### Debug Mode
-
-Enable detailed logging:
+### Running Benchmarks
 
 ```bash
-# In .env
-DEBUG_MODE=true
-LOG_LEVEL=DEBUG
+# Single scenario, Telegram mode (default)
+just bench file
+just bench weather
+just bench web
+just bench summarize
+just bench gmail
+just bench github
+just bench compound
 
-# Or via CLI
-uv run python cli.py -v --async benchmark-suite --scenario file
+# Single scenario, local mode
+just bench file mode=local
+just bench all mode=local
+
+# Switch the bot's model before running
+just bench file model="anthropic/claude-opus-4-5"
+
+# Save results to JSON
+just bench file output=results.json
+just bench all mode=local output=results.json
 ```
+
+The `bench` recipe signature:
+```
+just bench <scenario> [mode=telegram|local] [model=provider/model] [output=file.json]
+```
+
+Logs are automatically saved to `logs/bench_<scenario>_<timestamp>.log`.
+
+### Model Sweep
+
+Discovers all models configured on the bot, runs every scenario against each, and prints a cross-model summary table.
+
+```bash
+# Telegram mode (discovers models via SSH)
+just sweep
+just sweep output=sweep_results.json
+
+# Local mode (discovers models via 'openclaw models list --json')
+just sweep mode=local
+just sweep mode=local output=sweep_results.json
+```
+
+The `sweep` recipe signature:
+```
+just sweep [mode=telegram|local] [output=file.json]
+```
+
+### Evaluating Results
+
+```bash
+just evaluate sweep_results.json
+```
+
+### Authentication (Telegram Mode Only)
+
+```bash
+just auth         # Authenticate and save session
+just auth-reset   # Delete saved session (re-authenticate next time)
+```
+
+### Viewing Logs
+
+```bash
+just logs         # List the 20 most recent log files
+```
+
+### Development
+
+```bash
+just install          # Install runtime dependencies
+just install-dev      # Install with dev/test dependencies
+
+just test             # Run pytest
+just test-cov         # Run tests with HTML coverage report
+just lint             # Check code with ruff
+just format           # Auto-format with ruff
+just format-check     # Check formatting without modifying files
+just dev              # format + lint + test
+just ci               # format-check + lint + test-cov
+```
+
+### Cleanup
+
+```bash
+just clean            # Remove test artifacts, .pyc, coverage
+just clean-logs       # Remove logs/ directory
+just clean-workspace  # Remove /tmp/openclaw_benchmark (local workspace)
+just clean-all        # Everything above + .venv + uv.lock
+```
+
+---
+
+## Scenarios
+
+Each scenario has 9 tasks (3 easy, 3 medium, 3 hard). Required skills must be installed on the bot before running.
+
+| Scenario | Required Skill | What It Tests |
+|---|---|---|
+| `file` | None (core tools) | File creation, JSON→CSV, data extraction, log analysis, config diffs |
+| `weather` | `clawhub install steipete/weather` | Current weather, forecasts, multi-city comparisons |
+| `web` | `clawhub install steipete/tavily` | Web search, fact retrieval, research questions |
+| `summarize` | `clawhub install steipete/summarize` | URL summaries, YouTube summaries, document comparison |
+| `gmail` | `clawhub install gog` | Send email, read inbox, search, thread replies |
+| `github` | `clawhub install steipete/github` | Create issues, list issues, read repo files, create PRs |
+| `compound` | weather + tavily + github + summarize | Multi-skill chains: weather+issue, web+summarize, 3-step chains |
+| `all` | All of the above | Runs all 7 scenarios sequentially |
+
+### Installing Skills on the Bot
+
+Before running scenarios that need skills, install them on your OpenClaw bot:
+
+```bash
+clawhub install steipete/weather
+clawhub install steipete/tavily
+clawhub install steipete/summarize
+clawhub install steipete/github
+clawhub install gog
+```
+
+The benchmark will warn you if a required skill is missing and skip the scenario.
+
+---
+
+## Validation
+
+The framework uses a two-phase validation approach:
+
+**Phase 1 — Conversation detection:** The AI agent looks for completion signals in the conversation (e.g. "thanks", "done", the bot says "task complete"). Marks the conversation as `goal_achieved`, `max_turns`, `timeout`, or `error`.
+
+**Phase 2 — Result validation:** A scenario-specific validator checks the actual output:
+
+| Mode | Validation |
+|---|---|
+| Local | Full automated validation — validators inspect the local filesystem directly |
+| Telegram | SSH-based validation — validators download files from the bot server via SSH and inspect them locally |
+
+For Telegram mode, SSH credentials (`BOT_SSH_*`) must be configured. Without them, file-based scenarios (file, summarize) can only do conversation-level validation.
+
+**Reading results:**
+- `success: true` + `accuracy: 100%` — task completed and validated
+- `success: false` + `accuracy: 0%` — task failed or validation failed
+- `completion_reason: timeout` — bot did not respond within the timeout
+- `completion_reason: max_turns` — task not finished within 10 turns
+
+---
 
 ## Project Structure
 
 ```
 opencalw-sandbox/
-├── pyproject.toml              # Project dependencies
-├── README.md                   # This file
-├── .env.example                # Example configuration
-├── justfile                    # Task runner commands
-├── config.py                   # Configuration management
-├── telegram_client.py          # Pyrogram Telegram client
-├── local_client.py             # Local OpenClaw CLI client
-├── cli.py                      # CLI interface
+├── cli.py                      # Entry point: benchmark-suite, benchmark-sweep
+├── config.py                   # Pydantic settings from .env
+├── telegram_client.py          # Pyrogram user-based Telegram client
+├── local_client.py             # Local openclaw CLI subprocess wrapper
+├── telegram_auth.py            # One-time Telegram auth helper
+├── justfile                    # Task runner (use 'just' to see all commands)
+├── .env.example                # Annotated config template
+│
 ├── benchmarks/
-│   ├── __init__.py
-│   ├── base.py                 # Benchmark framework base
-│   ├── ai_agent.py             # Pydantic AI agent
-│   ├── skill_checker.py        # Skill availability checker
+│   ├── base.py                 # ScenarioBase, TaskResult, BenchmarkTask
+│   ├── ai_agent.py             # BenchmarkAgent — OpenAI-powered user simulator
+│   ├── skill_checker.py        # Detects which skills are available on the bot
+│   ├── remote_workspace.py     # SSH workspace setup + RemoteWorkspaceManager
+│   │                           # + LocalModelManager (for local sweep)
 │   ├── scenarios/
-│   │   ├── __init__.py         # Scenario registry
-│   │   ├── file_scenario.py    # File manipulation tests
-│   │   ├── gmail_scenario.py   # Email operations tests
-│   │   ├── web_scenario.py     # Web search tests
-│   │   ├── weather_scenario.py # Weather information tests
-│   │   ├── summarize_scenario.py # Content summarization tests
-│   │   └── github_scenario.py  # GitHub operations tests
+│   │   ├── file_scenario.py
+│   │   ├── weather_scenario.py
+│   │   ├── web_scenario.py
+│   │   ├── summarize_scenario.py
+│   │   ├── gmail_scenario.py
+│   │   ├── github_scenario.py
+│   │   └── compound_scenario.py
 │   ├── setup/
-│   │   ├── file_setup.py       # File scenario setup
-│   │   ├── gmail_setup.py      # Gmail API helper
-│   │   └── github_setup.py     # GitHub API helper
+│   │   ├── file_setup.py       # Creates seed files in workspace
+│   │   ├── gmail_setup.py      # Gmail API helper (sends test emails)
+│   │   ├── github_setup.py     # GitHub API helper (seeds test issues)
+│   │   └── summarize_setup.py  # Uploads documents to workspace
 │   └── validators/
-│       ├── file_validator.py   # File validation logic
-│       ├── gmail_validator.py  # Gmail validation logic
-│       ├── web_validator.py    # Web search validation logic
-│       ├── weather_validator.py # Weather validation logic
-│       ├── summarize_validator.py # Summarize validation logic
-│       └── github_validator.py # GitHub validation logic
+│       ├── file_validator.py
+│       ├── web_validator.py
+│       ├── weather_validator.py
+│       ├── summarize_validator.py
+│       ├── gmail_validator.py
+│       ├── github_validator.py
+│       └── compound_validator.py
+│
+├── tools/
+│   └── get_gmail_token.py      # Generate Gmail OAuth2 refresh token
+│
 └── tests/
-    ├── conftest.py             # Pytest fixtures
-    └── test_*.py               # Test files
+    ├── conftest.py
+    └── test_*.py
 ```
 
-## Future Enhancements
+---
 
-- **Remote validation**: SSH or API-based remote file validation
-- **More scenarios**: Image generation, code analysis, database operations
-- **Parallel execution**: Run multiple tasks concurrently
-- **Advanced metrics**: Percentile analysis, token usage tracking
-- **Result comparison**: Compare benchmark runs over time
-- **Difficulty levels**: Add MEDIUM and HARD variants of existing tasks
+## Troubleshooting
+
+**`openclaw CLI not found`** (local mode)
+Install OpenClaw and make sure it is on your `$PATH`. Run `openclaw --version` to verify.
+
+**`OPENAI_API_KEY is required`**
+Set `OPENAI_API_KEY` in your `.env`. The AI agent that drives conversations requires it.
+
+**`benchmark-sweep requires SSH credentials`** (Telegram mode sweep)
+Set `BOT_SSH_HOST`, `BOT_SSH_USER`, and either `BOT_SSH_KEY_PATH` or `BOT_SSH_PASSWORD` in `.env`. The sweep needs SSH to discover and switch models on the remote bot.
+
+**`No models found`** (local mode sweep)
+Make sure `openclaw models list --json` returns output in your terminal. The sweep calls this to discover models.
+
+**Scenario skipped with "missing skills"**
+Install the required skill on your bot (see the scenario table above), then re-run.
+
+**Telegram auth loop / session errors**
+Delete the session file and re-authenticate:
+```bash
+just auth-reset
+just auth
+```
+
+**Bot goes silent / response timeout after 30s**
+Some compound tasks involving the Summarize skill can cause the bot to process silently without sending a Telegram reply. This is a bot-side issue — the benchmark logs `Response timeout after 30.0s`. The task is marked failed. This is expected behavior to measure.
+
+**Results always 0% accuracy in Telegram mode**
+Configure SSH credentials in `.env` so the framework can download and validate files from the bot server.
+
+**Enable debug logging**
+```bash
+# In .env:
+DEBUG_MODE=true
+LOG_LEVEL=DEBUG
+
+# Or inline:
+uv run python cli.py -v --async benchmark-suite --scenario file
+```
+
+---
+
+## Gmail Setup (detailed)
+
+The Gmail scenario requires two Gmail accounts because the bot sends/reads from one account, and the benchmark validates from a separate account.
+
+1. Create a **benchmark Gmail account** (separate from the bot's account)
+2. Go to [Google Cloud Console](https://console.cloud.google.com/)
+3. Create a project → Enable the Gmail API
+4. Create OAuth2 credentials (Desktop app type) for the benchmark account
+5. Generate a refresh token:
+   ```bash
+   uv run python tools/get_gmail_token.py
+   ```
+6. Copy the credentials into `.env` (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REFRESH_TOKEN`)
+7. Set `GMAIL_BENCHMARK_EMAIL` (the benchmark account) and `GMAIL_BOT_EMAIL` (the bot's account)
+
+---
+
+## GitHub Setup (detailed)
+
+1. Create a **benchmark GitHub account** (separate from the bot's account)
+2. Create a test repository in that account
+3. Generate a Personal Access Token with `repo` scope: [github.com/settings/tokens](https://github.com/settings/tokens)
+4. Set `GITHUB_TOKEN`, `GITHUB_TEST_REPO_OWNER`, and `GITHUB_TEST_REPO_NAME` in `.env`
+
+---
 
 ## License
 
