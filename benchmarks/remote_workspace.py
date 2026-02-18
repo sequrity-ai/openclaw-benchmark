@@ -608,6 +608,100 @@ format = json
         import stat
         return stat.S_ISDIR(item.st_mode)
 
+    def list_models(self) -> list[str]:
+        """List all available models on the remote bot via SSH.
+
+        Runs `openclaw models list --json` on the remote server and parses
+        the output into a list of model identifiers (provider/model format).
+
+        Returns:
+            List of model identifiers, e.g. ["openai/gpt-4o", "anthropic/claude-opus-4-5"]
+
+        Raises:
+            RuntimeError: If the command fails or output cannot be parsed
+        """
+        self.connect()
+        logger.info("Listing available models on remote bot")
+        _OPENCLAW_ENV = (
+            "PATH=/home/openclaw/.nvm/versions/node/v24.13.1/bin"
+            ":/home/openclaw/.local/bin:$PATH"
+        )
+        exit_code, stdout, stderr = self._exec_command(
+            f'env {_OPENCLAW_ENV} openclaw models list --json'
+        )
+        if exit_code != 0:
+            raise RuntimeError(f"Failed to list models: {(stdout + stderr).strip()}")
+
+        def _parse_item(item: object) -> str | None:
+            """Extract model key from a model list item."""
+            if isinstance(item, str):
+                return item
+            if isinstance(item, dict):
+                # openclaw JSON uses "key" field; fall back to id/model/name
+                for k in ("key", "id", "model", "name"):
+                    if k in item:
+                        return str(item[k])
+            return None
+
+        try:
+            data = json.loads(stdout.strip())
+            models: list[str] = []
+            items: list[object] = []
+            if isinstance(data, list):
+                items = data
+            elif isinstance(data, dict):
+                # Wrapped: {"models": [...], "count": N}
+                for val in data.values():
+                    if isinstance(val, list):
+                        items = val
+                        break
+            for item in items:
+                key = _parse_item(item)
+                if key:
+                    models.append(key)
+            logger.info(f"Found {len(models)} model(s): {models}")
+            return models
+        except json.JSONDecodeError:
+            # Fallback: try --plain output, one model per line
+            logger.warning("JSON parse failed, trying plain text fallback")
+            exit_code2, stdout2, _ = self._exec_command(
+                f'env {_OPENCLAW_ENV} openclaw models list --plain'
+            )
+            if exit_code2 == 0:
+                lines = [l.strip() for l in stdout2.splitlines() if l.strip() and "/" in l]
+                logger.info(f"Found {len(lines)} model(s) (plain): {lines}")
+                return lines
+            raise RuntimeError(f"Could not parse model list output: {stdout[:200]}")
+
+    def switch_model(self, model: str) -> str:
+        """Switch the OpenClaw bot's primary model via SSH.
+
+        Runs `openclaw models set <model>` on the remote server.
+
+        Args:
+            model: Model identifier in provider/model format (e.g. anthropic/claude-opus-4-5)
+
+        Returns:
+            Output from the command (for confirmation logging)
+
+        Raises:
+            RuntimeError: If the command fails
+        """
+        self.connect()
+        logger.info(f"Switching bot model to: {model}")
+        # Use bash login shell to ensure NVM/PATH is set up (openclaw requires node)
+        _OPENCLAW_ENV = (
+            "PATH=/home/openclaw/.nvm/versions/node/v24.13.1/bin"
+            ":/home/openclaw/.local/bin:$PATH"
+        )
+        cmd = f'env {_OPENCLAW_ENV} openclaw models set {model}'
+        exit_code, stdout, stderr = self._exec_command(cmd)
+        output = (stdout + stderr).strip()
+        if exit_code != 0:
+            raise RuntimeError(f"Failed to switch model to {model!r}: {output}")
+        logger.info(f"Model switched to {model}: {output}")
+        return output
+
     def remote_cleanup(self) -> bool:
         """Remove workspace on remote bot server.
 

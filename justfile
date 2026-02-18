@@ -45,32 +45,51 @@ auth-reset:
 
 # Run benchmark scenario (setup is automatic)
 # Scenarios: file, weather, web, summarize, gmail, github, compound, all
-# Usage: just bench file                    (Telegram mode with remote validation, default)
-#        just bench file --mode local       (Local mode)
-#        just bench all --mode telegram     (All scenarios)
-#        just bench compound               (Multi-skill compound scenario)
+# Usage: just bench file                                             (Telegram mode, default)
+#        just bench file model="anthropic/claude-opus-4-5"          (Switch bot model first)
+#        just bench file mode=local                                  (Local mode)
+#        just bench all mode=telegram                                (All scenarios)
+#        just bench compound                                         (Multi-skill compound scenario)
 # Logs are automatically saved to logs/bench_<scenario>_<timestamp>.log
-bench scenario="file" mode="telegram" output="":
+bench scenario="file" mode="telegram" output="" model="":
     #!/usr/bin/env bash
     mkdir -p logs
     log_file="logs/bench_{{scenario}}_$(date +%Y%m%d_%H%M%S).log"
     echo "Logging to $log_file"
+    bot_model_flag=""
+    if [ -n "{{model}}" ]; then
+        bot_model_flag="--bot-model {{model}}"
+    fi
     if [ "{{mode}}" = "local" ]; then
         if [ -z "{{output}}" ]; then
-            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} 2>&1 | tee "$log_file"
+            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} $bot_model_flag 2>&1 | tee "$log_file"
         else
-            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} --output {{output}} 2>&1 | tee "$log_file"
+            uv run python cli.py --async --local benchmark-suite --scenario {{scenario}} $bot_model_flag --output {{output}} 2>&1 | tee "$log_file"
         fi
     elif [ "{{mode}}" = "telegram" ]; then
         if [ -z "{{output}}" ]; then
-            uv run python cli.py --async benchmark-suite --scenario {{scenario}} 2>&1 | tee "$log_file"
+            uv run python cli.py --async benchmark-suite --scenario {{scenario}} $bot_model_flag 2>&1 | tee "$log_file"
         else
-            uv run python cli.py --async benchmark-suite --scenario {{scenario}} --output {{output}} 2>&1 | tee "$log_file"
+            uv run python cli.py --async benchmark-suite --scenario {{scenario}} $bot_model_flag --output {{output}} 2>&1 | tee "$log_file"
         fi
     else
         echo "Error: mode must be 'local' or 'telegram'"
-        echo "Usage: just bench <scenario> --mode [local|telegram] [output_file]"
+        echo "Usage: just bench <scenario> [mode=local|telegram] [model=provider/model] [output=file]"
         exit 1
+    fi
+
+# Run model sweep: discover all models on remote bot, run all scenarios for each
+# Usage: just sweep
+#        just sweep output=sweep_results.json
+sweep output="":
+    #!/usr/bin/env bash
+    mkdir -p logs
+    log_file="logs/sweep_$(date +%Y%m%d_%H%M%S).log"
+    echo "Logging to $log_file"
+    if [ -z "{{output}}" ]; then
+        uv run python cli.py --async benchmark-sweep 2>&1 | tee "$log_file"
+    else
+        uv run python cli.py --async benchmark-sweep --output {{output}} 2>&1 | tee "$log_file"
     fi
 
 # Evaluate benchmark results from JSON file
@@ -136,7 +155,8 @@ info:
     @echo "Location: $(pwd)"
     @echo ""
     @echo "Quick commands:"
-    @echo "  just bench file              - Run file benchmark (Telegram + remote validation)"
+    @echo "  just bench file                                  - Run file benchmark (Telegram)"
+    @echo "  just bench file model=anthropic/claude-opus-4-5 - Run with bot model switch"
     @echo "  just bench weather           - Run weather benchmark"
     @echo "  just bench web               - Run web search benchmark"
     @echo "  just bench summarize         - Run summarize benchmark"
@@ -144,7 +164,7 @@ info:
     @echo "  just bench github            - Run GitHub benchmark"
     @echo "  just bench compound          - Run compound multi-skill benchmark"
     @echo "  just bench all               - Run all benchmarks"
-    @echo "  just bench file --mode local - Run file benchmark (local mode)"
+    @echo "  just bench file mode=local   - Run file benchmark (local mode)"
     @echo "  just logs                    - List recent run logs (logs/bench_*.log)"
     @echo "  just evaluate results.json   - Evaluate benchmark results"
     @echo "  just auth                    - Authenticate with Telegram"

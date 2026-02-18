@@ -243,6 +243,8 @@ def _print_suite_header(config, scenarios, skipped, args):
     print(f"\n{'='*60}")
     print("OpenClaw Benchmark Suite")
     print(f"Mode: {mode}")
+    if config.bot_model:
+        print(f"Bot model: {config.bot_model}")
     print(f"Running {len(scenarios)} scenario(s): {', '.join(s.name for s in scenarios)}")
 
     if not config.local_mode:
@@ -293,6 +295,7 @@ def _export_results(config, all_results, output_path):
         "config": {
             "async_mode": config.async_mode,
             "local_mode": config.local_mode,
+            "bot_model": config.bot_model if config.bot_model else None,
         },
         "scenarios": [result.to_dict() for result in all_results],
         "summary": {
@@ -336,6 +339,21 @@ async def run_benchmark_suite_async(config: TelegramConfig, args) -> None:
         else:
             logger.warning("Remote mode without SSH credentials - validation will be skipped")
             print("⚠️  Remote mode without SSH credentials - file validation will be skipped")
+
+    # Switch bot model if requested (remote mode only)
+    if config.bot_model and not config.local_mode:
+        if remote_manager:
+            print(f"Switching bot model to: {config.bot_model}")
+            try:
+                output = remote_manager.switch_model(config.bot_model)
+                print(f"Bot model switched to {config.bot_model}")
+                if output:
+                    print(f"  {output}")
+            except Exception as e:
+                print(f"WARNING: Failed to switch bot model: {e}")
+                raise
+        else:
+            print("WARNING: --bot-model requires SSH credentials (BOT_SSH_KEY_PATH or BOT_SSH_PASSWORD)")
 
     scenarios, skipped = _build_scenarios(args, skip_missing=args.skip_missing, local_mode=config.local_mode, remote_manager=remote_manager)
 
@@ -409,6 +427,21 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
             logger.warning("Remote mode without SSH credentials - validation will be skipped")
             print("⚠️  Remote mode without SSH credentials - file validation will be skipped")
 
+    # Switch bot model if requested (remote mode only)
+    if config.bot_model and not config.local_mode:
+        if remote_manager:
+            print(f"Switching bot model to: {config.bot_model}")
+            try:
+                output = remote_manager.switch_model(config.bot_model)
+                print(f"Bot model switched to {config.bot_model}")
+                if output:
+                    print(f"  {output}")
+            except Exception as e:
+                print(f"WARNING: Failed to switch bot model: {e}")
+                raise
+        else:
+            print("WARNING: --bot-model requires SSH credentials (BOT_SSH_KEY_PATH or BOT_SSH_PASSWORD)")
+
     scenarios, skipped = _build_scenarios(args, skip_missing=args.skip_missing, local_mode=config.local_mode, remote_manager=remote_manager)
 
     if not scenarios:
@@ -457,6 +490,241 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
 
         if args.output:
             _export_results(config, all_results, args.output)
+
+
+async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
+    """Run benchmark suite across all available models (sweep mode)."""
+    if config.local_mode:
+        print("ERROR: benchmark-sweep requires remote (Telegram) mode with SSH credentials.")
+        print("Cannot discover models in local mode.")
+        raise ValueError("benchmark-sweep not supported in local mode")
+
+    if not (config.bot_ssh_key_path or config.bot_ssh_password):
+        print("ERROR: benchmark-sweep requires SSH credentials.")
+        print("Set BOT_SSH_KEY_PATH or BOT_SSH_PASSWORD in your .env file.")
+        raise ValueError("benchmark-sweep requires SSH credentials for model discovery")
+
+    from benchmarks.remote_workspace import RemoteWorkspaceManager
+
+    remote_manager = RemoteWorkspaceManager(
+        host=config.bot_ssh_host,
+        port=config.bot_ssh_port,
+        user=config.bot_ssh_user,
+        key_path=config.bot_ssh_key_path if config.bot_ssh_key_path else None,
+        password=config.bot_ssh_password if config.bot_ssh_password else None,
+        workspace_path=config.bot_workspace_path,
+        key_passphrase=config.bot_ssh_key_passphrase if config.bot_ssh_key_passphrase else None,
+    )
+    print(f"Remote sweep: SSH to {config.bot_ssh_user}@{config.bot_ssh_host}")
+
+    # Discover available models
+    print("\nDiscovering available models on remote bot...")
+    try:
+        models = remote_manager.list_models()
+    except Exception as e:
+        print(f"ERROR: Failed to list models: {e}")
+        raise
+
+    if not models:
+        print("ERROR: No models found on remote bot.")
+        raise RuntimeError("No models available for sweep")
+
+    print(f"Found {len(models)} model(s):")
+    for m in models:
+        print(f"  - {m}")
+
+    # Build scenarios once (same for all models)
+    scenarios, skipped = _build_scenarios(
+        args,
+        skip_missing=args.skip_missing,
+        local_mode=False,
+        remote_manager=remote_manager,
+    )
+
+    if not scenarios:
+        print("\nNo scenarios to run (all skipped due to missing skills).")
+        return
+
+    if skipped:
+        print(f"\nSkipping {len(skipped)} scenario(s) with missing skills: {', '.join(skipped)}")
+
+    # Create AI agent (required)
+    if not config.openai_api_key:
+        print("\nERROR: OPENAI_API_KEY is required for multi-turn conversations.")
+        raise ValueError("Missing required OPENAI_API_KEY configuration")
+
+    ai_agent = BenchmarkAgent(
+        model_name=config.ai_agent_model,
+        openai_api_key=config.openai_api_key,
+        max_turns=config.max_conversation_turns,
+        conversation_timeout=config.conversation_timeout,
+    )
+
+    # Print sweep header
+    print(f"\n{'='*70}")
+    print(f"BENCHMARK SWEEP")
+    print(f"{'='*70}")
+    print(f"Models:    {len(models)}")
+    print(f"Scenarios: {len(scenarios)} ({', '.join(s.name for s in scenarios)})")
+    print(f"AI Agent:  {config.ai_agent_model}")
+    print(f"{'='*70}\n")
+
+    results_by_model: dict[str, list] = {}
+
+    client_cls = TelegramClient
+    bot_identifier = config.openclaw_bot_username
+
+    for model_idx, model in enumerate(models, 1):
+        print(f"\n{'#'*70}")
+        print(f"MODEL [{model_idx}/{len(models)}]: {model}")
+        print(f"{'#'*70}")
+
+        # Switch bot to this model
+        try:
+            print(f"Switching bot to model: {model}")
+            output = remote_manager.switch_model(model)
+            print(f"Model switched successfully.")
+            if output:
+                print(f"  {output}")
+        except Exception as e:
+            print(f"WARNING: Failed to switch to model {model}: {e}")
+            print("Skipping this model.")
+            results_by_model[model] = []
+            continue
+
+        # Run all scenarios for this model
+        model_results = []
+        async with client_cls(config) as client:
+            for i, scenario in enumerate(scenarios, 1):
+                print(f"\n  [{i}/{len(scenarios)}] Scenario: {scenario.name}")
+                result = await scenario.run_async(
+                    client,
+                    bot_identifier,
+                    skip_setup=args.no_setup,
+                    timeout_multiplier=config.timeout_multiplier,
+                    ai_agent=ai_agent,
+                )
+                model_results.append(result)
+                passed = sum(1 for t in result.task_results if t.success)
+                print(f"    Result: {passed}/{len(result.task_results)} tasks passed, {result.average_accuracy:.1f}% accuracy")
+
+        results_by_model[model] = model_results
+
+    # Print cross-model summary table
+    scenario_names = [s.name for s in scenarios]
+    col_w = 10  # width per scenario column
+    model_col = 38  # width for model name column
+
+    # Build a lookup: results_by_model[model] is a list aligned with scenarios[]
+    # Map scenario name → index for fast lookup
+    scen_idx = {s.name: i for i, s in enumerate(scenarios)}
+
+    def _cell(model_results_list: list, scen_name: str) -> str:
+        """Return 'P/T' string for a given model+scenario."""
+        if not model_results_list:
+            return "SKIP"
+        for r in model_results_list:
+            if r.scenario_name == scen_name:
+                passed = sum(1 for t in r.task_results if t.success)
+                total = len(r.task_results)
+                return f"{passed}/{total}"
+        return "-"
+
+    sep = "=" * (model_col + col_w * len(scenario_names) + col_w + 2)
+    thin = "-" * len(sep)
+
+    print(f"\n{sep}")
+    print(f"SWEEP SUMMARY")
+    print(f"{sep}")
+
+    # Header row
+    header = f"{'Model':<{model_col}}"
+    for sn in scenario_names:
+        label = sn[:col_w - 1]
+        header += f"{label:>{col_w}}"
+    header += f"{'TOTAL':>{col_w}}"
+    print(header)
+    print(thin)
+
+    # One row per model
+    for model, model_results in results_by_model.items():
+        if not model_results:
+            row = f"{model[:model_col - 1]:<{model_col}}"
+            row += f"{'SKIPPED':>{col_w * len(scenario_names) + col_w}}"
+            print(row)
+            continue
+        total_tasks = sum(len(r.task_results) for r in model_results)
+        total_passed = sum(sum(1 for t in r.task_results if t.success) for r in model_results)
+        pct = 100.0 * total_passed / total_tasks if total_tasks else 0.0
+        row = f"{model[:model_col - 1]:<{model_col}}"
+        for sn in scenario_names:
+            row += f"{_cell(model_results, sn):>{col_w}}"
+        row += f"{f'{total_passed}/{total_tasks} ({pct:.0f}%)':>{col_w}}"
+        print(row)
+
+    # Scenario totals row (across all models that completed)
+    print(thin)
+    totals_row = f"{'SCENARIO TOTALS':<{model_col}}"
+    grand_passed = 0
+    grand_tasks = 0
+    for sn in scenario_names:
+        sp = st = 0
+        for model_results in results_by_model.values():
+            for r in model_results:
+                if r.scenario_name == sn:
+                    sp += sum(1 for t in r.task_results if t.success)
+                    st += len(r.task_results)
+        grand_passed += sp
+        grand_tasks += st
+        totals_row += f"{f'{sp}/{st}':>{col_w}}"
+    grand_pct = 100.0 * grand_passed / grand_tasks if grand_tasks else 0.0
+    totals_row += f"{f'{grand_passed}/{grand_tasks} ({grand_pct:.0f}%)':>{col_w}}"
+    print(totals_row)
+    print(sep)
+
+    # Export results if requested
+    if args.output:
+        import json as _json
+        sweep_data = {
+            "sweep": {
+                "models": models,
+                "scenarios": [s.name for s in scenarios],
+            },
+            "config": {
+                "async_mode": config.async_mode,
+                "local_mode": config.local_mode,
+            },
+            "results_by_model": {
+                model: [r.to_dict() for r in model_results]
+                for model, model_results in results_by_model.items()
+            },
+            "summary": {
+                "total_models": len(models),
+                "models_completed": sum(1 for v in results_by_model.values() if v),
+                "per_model": {
+                    model: {
+                        "total_tasks": sum(len(r.task_results) for r in model_results),
+                        "tasks_passed": sum(sum(1 for t in r.task_results if t.success) for r in model_results),
+                        "overall_accuracy": (
+                            sum(r.average_accuracy for r in model_results) / len(model_results)
+                            if model_results else 0.0
+                        ),
+                        "per_scenario": {
+                            r.scenario_name: {
+                                "tasks_passed": sum(1 for t in r.task_results if t.success),
+                                "total_tasks": len(r.task_results),
+                                "accuracy": r.average_accuracy,
+                            }
+                            for r in model_results
+                        },
+                    }
+                    for model, model_results in results_by_model.items()
+                },
+            },
+        }
+        with open(args.output, "w") as f:
+            _json.dump(sweep_data, f, indent=2)
+        print(f"\nSweep results exported to: {args.output}")
 
 
 def main() -> int:
@@ -545,6 +813,41 @@ def main() -> int:
     suite_parser.add_argument(
         "--output", "-o", type=Path, help="Output path for results (JSON)"
     )
+    suite_parser.add_argument(
+        "--bot-model",
+        dest="bot_model",
+        type=str,
+        default=None,
+        help="Switch bot to this model before running (e.g. anthropic/claude-opus-4-5). Requires SSH credentials.",
+    )
+
+    # benchmark-sweep subcommand: discover all models via SSH and run all scenarios for each
+    sweep_parser = subparsers.add_parser(
+        "benchmark-sweep",
+        help="Discover all models on remote bot and run full benchmark suite for each",
+    )
+    sweep_parser.add_argument(
+        "--no-setup",
+        action="store_true",
+        help="Skip setup phase for all scenarios",
+    )
+    sweep_parser.add_argument(
+        "--skip-missing",
+        action="store_true",
+        default=True,
+        help="Skip scenarios with missing skills (default: true)",
+    )
+    sweep_parser.add_argument(
+        "--no-skip-missing",
+        dest="skip_missing",
+        action="store_false",
+        help="Fail instead of skipping scenarios with missing skills",
+    )
+    sweep_parser.add_argument(
+        "--output", "-o", type=Path, help="Output path for sweep results (JSON)"
+    )
+    # benchmark-sweep always uses scenario="all" internally
+    sweep_parser.set_defaults(scenario="all", chat_id=0)
 
     args = parser.parse_args()
 
@@ -566,6 +869,10 @@ def main() -> int:
     # Override local mode if --local flag is set
     if hasattr(args, "local") and args.local:
         config.local_mode = True
+
+    # Override bot model if --bot-model flag is set
+    if hasattr(args, "bot_model") and args.bot_model:
+        config.bot_model = args.bot_model
 
     mode_label = "local" if config.local_mode else ("async" if config.async_mode else "sync")
     logger.info(f"Running in {mode_label} mode")
@@ -673,6 +980,16 @@ def main() -> int:
             return 0
         except Exception as e:
             logger.error(f"Benchmark suite failed: {e}")
+            import traceback
+            traceback.print_exc()
+            return 1
+
+    elif args.command == "benchmark-sweep":
+        try:
+            asyncio.run(run_benchmark_sweep_async(config, args))
+            return 0
+        except Exception as e:
+            logger.error(f"Benchmark sweep failed: {e}")
             import traceback
             traceback.print_exc()
             return 1

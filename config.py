@@ -122,6 +122,12 @@ class TelegramConfig(BaseSettings):
         description="Passphrase for encrypted SSH private key (if applicable)",
     )
 
+    # Bot model switching (remote mode only)
+    bot_model: str = Field(
+        default="",
+        description="OpenClaw bot model to switch to before benchmarking (e.g. anthropic/claude-opus-4-5). Empty = use bot's current model.",
+    )
+
     # AI agent settings
     ai_agent_model: str = Field(
         default="gpt-4o-mini",
