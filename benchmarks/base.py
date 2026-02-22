@@ -67,6 +67,11 @@ class TaskResult:
     conversation_turns: int = 1  # Number of turns in conversation (default 1 for single-turn)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     completion_reason: str = ""  # "goal_achieved", "max_turns", "timeout", "error", "validation"
+    # Token usage tracking
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
@@ -82,6 +87,10 @@ class TaskResult:
             "conversation_turns": self.conversation_turns,
             "conversation_history": self.conversation_history,
             "completion_reason": self.completion_reason,
+            "input_tokens": self.input_tokens,
+            "output_tokens": self.output_tokens,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cache_read_tokens": self.cache_read_tokens,
         }
 
 
@@ -118,6 +127,26 @@ class ScenarioResult:
             return 0.0
         return sum(task.latency for task in self.task_results) / len(self.task_results)
 
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(task.input_tokens for task in self.task_results)
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(task.output_tokens for task in self.task_results)
+
+    @property
+    def total_reasoning_tokens(self) -> int:
+        return sum(task.reasoning_tokens for task in self.task_results)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        return sum(task.cache_read_tokens for task in self.task_results)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens + self.total_reasoning_tokens + self.total_cache_read_tokens
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -145,6 +174,11 @@ class ScenarioResult:
             "all_tasks_passed": self.all_tasks_passed,
             "average_accuracy": self.average_accuracy,
             "average_latency": self.average_latency,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_reasoning_tokens": self.total_reasoning_tokens,
+            "total_cache_read_tokens": self.total_cache_read_tokens,
+            "total_tokens": self.total_tokens,
             "cleanup_success": self.cleanup_success,
             "metadata": self.metadata,
         }
@@ -389,6 +423,10 @@ class ScenarioBase(ABC):
                         for turn in conversation_result.conversation_turns
                     ]
                     validation_result.completion_reason = conversation_result.completion_reason
+                    validation_result.input_tokens = conversation_result.total_input_tokens
+                    validation_result.output_tokens = conversation_result.total_output_tokens
+                    validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
+                    validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
                     task_results.append(validation_result)
 
                     logger.info(
@@ -396,7 +434,11 @@ class ScenarioBase(ABC):
                         f"success={validation_result.success}, "
                         f"accuracy={validation_result.accuracy_score:.1f}, "
                         f"latency={task_latency:.2f}s, "
-                        f"reason={conversation_result.completion_reason}"
+                        f"reason={conversation_result.completion_reason}, "
+                        f"tokens: in={conversation_result.total_input_tokens} "
+                        f"out={conversation_result.total_output_tokens} "
+                        f"reasoning={conversation_result.total_reasoning_tokens} "
+                        f"cache_read={conversation_result.total_cache_read_tokens}"
                     )
                 else:
                     # Conversation failed
@@ -419,6 +461,10 @@ class ScenarioBase(ABC):
                                 for turn in conversation_result.conversation_turns
                             ],
                             completion_reason=conversation_result.completion_reason,
+                            input_tokens=conversation_result.total_input_tokens,
+                            output_tokens=conversation_result.total_output_tokens,
+                            reasoning_tokens=conversation_result.total_reasoning_tokens,
+                            cache_read_tokens=conversation_result.total_cache_read_tokens,
                         )
                     )
                     logger.error(
@@ -462,6 +508,13 @@ class ScenarioBase(ABC):
         logger.info(f"[{run_id}]   Tasks passed: {sum(1 for t in task_results if t.success)}/{len(task_results)}")
         logger.info(f"[{run_id}]   Average accuracy: {result.average_accuracy:.1f}%")
         logger.info(f"[{run_id}]   Average latency: {result.average_latency:.2f}s")
+        logger.info(
+            f"[{run_id}]   Tokens: input={result.total_input_tokens} "
+            f"output={result.total_output_tokens} "
+            f"reasoning={result.total_reasoning_tokens} "
+            f"cache_read={result.total_cache_read_tokens} "
+            f"total={result.total_tokens}"
+        )
 
         return result
 
@@ -596,6 +649,10 @@ class ScenarioBase(ABC):
                         for turn in conversation_result.conversation_turns
                     ]
                     validation_result.completion_reason = conversation_result.completion_reason
+                    validation_result.input_tokens = conversation_result.total_input_tokens
+                    validation_result.output_tokens = conversation_result.total_output_tokens
+                    validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
+                    validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
                     task_results.append(validation_result)
 
                     logger.info(
@@ -603,7 +660,11 @@ class ScenarioBase(ABC):
                         f"success={validation_result.success}, "
                         f"accuracy={validation_result.accuracy_score:.1f}%, "
                         f"completion={conversation_result.completion_reason}, "
-                        f"latency={task_latency:.2f}s"
+                        f"latency={task_latency:.2f}s, "
+                        f"tokens: in={conversation_result.total_input_tokens} "
+                        f"out={conversation_result.total_output_tokens} "
+                        f"reasoning={conversation_result.total_reasoning_tokens} "
+                        f"cache_read={conversation_result.total_cache_read_tokens}"
                     )
                     if validation_result.validation_details:
                         logger.info(f"[{run_id}] Validation details: {validation_result.validation_details}")
@@ -633,6 +694,10 @@ class ScenarioBase(ABC):
                                 for turn in conversation_result.conversation_turns
                             ],
                             completion_reason=conversation_result.completion_reason,
+                            input_tokens=conversation_result.total_input_tokens,
+                            output_tokens=conversation_result.total_output_tokens,
+                            reasoning_tokens=conversation_result.total_reasoning_tokens,
+                            cache_read_tokens=conversation_result.total_cache_read_tokens,
                         )
                     )
                     logger.error(
@@ -677,5 +742,12 @@ class ScenarioBase(ABC):
         logger.info(f"[{run_id}]   Tasks passed: {sum(1 for t in task_results if t.success)}/{len(task_results)}")
         logger.info(f"[{run_id}]   Average accuracy: {result.average_accuracy:.1f}%")
         logger.info(f"[{run_id}]   Average latency: {result.average_latency:.2f}s")
+        logger.info(
+            f"[{run_id}]   Tokens: input={result.total_input_tokens} "
+            f"output={result.total_output_tokens} "
+            f"reasoning={result.total_reasoning_tokens} "
+            f"cache_read={result.total_cache_read_tokens} "
+            f"total={result.total_tokens}"
+        )
 
         return result

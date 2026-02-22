@@ -816,6 +816,10 @@ class LocalModelManager:
                         items = val
                         break
             for item in items:
+                # Skip models marked as missing/unavailable
+                if isinstance(item, dict) and item.get("missing", False):
+                    logger.info(f"Skipping missing model: {item.get('key', item.get('name', '?'))}")
+                    continue
                 key = _parse_item(item)
                 if key:
                     models.append(key)

@@ -54,7 +54,7 @@ class WeatherScenario(ScenarioBase):
         super().__init__(
             name="Weather",
             description="Tests agent's ability to retrieve historical and climate facts using the weather skill",
-            required_skills=["steipete/weather"],
+            required_skills=["weather"],
         )
 
         self.validator = WeatherValidator()

@@ -66,7 +66,7 @@ class SummarizeScenario(ScenarioBase):
         super().__init__(
             name="Summarize",
             description="Tests agent's ability to summarize content from web, PDFs, videos",
-            required_skills=["steipete/summarize"],
+            required_skills=["summarize"],
         )
 
         self.validator = SummarizeValidator()

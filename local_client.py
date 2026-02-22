@@ -12,6 +12,17 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class TokenUsage:
+    """Token usage from a single agent call."""
+
+    input: int = 0
+    output: int = 0
+    reasoning: int = 0
+    cache_read: int = 0
+    total: int = 0
+
+
+@dataclass
 class LocalMessage:
     """Represents a response from the local OpenClaw agent."""
 
@@ -20,6 +31,7 @@ class LocalMessage:
     timestamp: float
     duration_ms: float = 0.0
     model: str | None = None
+    token_usage: TokenUsage | None = None
 
 
 class LocalClient:
@@ -100,12 +112,23 @@ class LocalClient:
         meta = data.get("result", {}).get("meta", {})
         agent_meta = meta.get("agentMeta", {})
 
+        # Parse token usage
+        usage_data = agent_meta.get("usage", {})
+        token_usage = TokenUsage(
+            input=usage_data.get("input", 0),
+            output=usage_data.get("output", 0),
+            reasoning=usage_data.get("reasoning", 0),
+            cache_read=usage_data.get("cacheRead", 0),
+            total=usage_data.get("total", 0),
+        )
+
         return LocalMessage(
             text=full_text,
             message_id=data.get("runId", ""),
             timestamp=time.time(),
             duration_ms=meta.get("durationMs", 0.0),
             model=agent_meta.get("model"),
+            token_usage=token_usage,
         )
 
     async def send_and_receive_async(
@@ -143,9 +166,13 @@ class LocalSession:
         self.messages.append(response)
 
         if response.text:
+            token_info = ""
+            if response.token_usage:
+                u = response.token_usage
+                token_info = f", tokens: in={u.input} out={u.output} reason={u.reasoning} total={u.total}"
             logger.info(
                 f"Received response ({len(response.text)} chars, "
-                f"{response.duration_ms:.0f}ms): {response.text[:80]}..."
+                f"{response.duration_ms:.0f}ms{token_info}): {response.text[:80]}..."
             )
         else:
             logger.warning("Received empty response from agent")
@@ -165,9 +192,13 @@ class LocalSession:
         self.messages.append(response)
 
         if response.text:
+            token_info = ""
+            if response.token_usage:
+                u = response.token_usage
+                token_info = f", tokens: in={u.input} out={u.output} reason={u.reasoning} total={u.total}"
             logger.info(
                 f"Received response ({len(response.text)} chars, "
-                f"{response.duration_ms:.0f}ms): {response.text[:80]}..."
+                f"{response.duration_ms:.0f}ms{token_info}): {response.text[:80]}..."
             )
         else:
             logger.warning("Received empty response from agent")

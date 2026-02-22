@@ -2,10 +2,21 @@
 
 import argparse
 import asyncio
+import gc
 import json
 import logging
 import sys
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Ensure an event loop exists before importing pyrogram (Python 3.12+ compat)
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
 
 from benchmark_runner import EXAMPLE_SCENARIOS, BenchmarkRunner, BenchmarkScenario
 from benchmarks.ai_agent import BenchmarkAgent
@@ -286,6 +297,7 @@ def _print_scenario_result(result, index, total):
     print(f"Tasks passed: {passed}/{len(result.task_results)}")
     print(f"Average accuracy: {result.average_accuracy:.1f}%")
     print(f"Average latency: {result.average_latency:.2f}s")
+    print(f"Tokens: input={result.total_input_tokens:,} output={result.total_output_tokens:,} reasoning={result.total_reasoning_tokens:,} total={result.total_tokens:,}")
     print(f"{'-'*60}\n")
 
 
@@ -492,6 +504,18 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
             _export_results(config, all_results, args.output)
 
 
+def _log_memory(label: str = "") -> None:
+    """Log current memory usage."""
+    try:
+        import resource
+        rss_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        rss_mb = rss_kb / 1024  # Linux reports KB
+        logger.info(f"[Memory] {label}: RSS={rss_mb:.0f}MB")
+        print(f"  [Memory] {label}: RSS={rss_mb:.0f}MB")
+    except Exception:
+        pass
+
+
 async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
     """Run benchmark suite across all available models (sweep mode)."""
     from benchmarks.remote_workspace import LocalModelManager, RemoteWorkspaceManager
@@ -553,7 +577,7 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
         return
 
     if skipped:
-        print(f"\nSkipping {len(skipped)} scenario(s) with missing skills: {', '.join(skipped)}")
+        print(f"\nSkipping {len(skipped)} scenario(s) with missing skills: {', '.join(name for name, _ in skipped)}")
 
     # Create AI agent (required)
     if not config.openai_api_key:
@@ -600,6 +624,11 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
         model_results = []
         async with client_cls(config) as client:
             for i, scenario in enumerate(scenarios, 1):
+                # Re-set model before each scenario (gateway may auto-rotate primary)
+                try:
+                    manager.switch_model(model)
+                except Exception as e:
+                    print(f"    WARNING: Could not re-set model before scenario: {e}")
                 print(f"\n  [{i}/{len(scenarios)}] Scenario: {scenario.name}")
                 result = await scenario.run_async(
                     client,
@@ -610,9 +639,15 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
                 )
                 model_results.append(result)
                 passed = sum(1 for t in result.task_results if t.success)
-                print(f"    Result: {passed}/{len(result.task_results)} tasks passed, {result.average_accuracy:.1f}% accuracy")
+                print(f"    Result: {passed}/{len(result.task_results)} tasks passed, {result.average_accuracy:.1f}% accuracy, tokens: {result.total_tokens:,}")
+                gc.collect()  # free memory between scenarios
 
         results_by_model[model] = model_results
+
+        # Free memory between model runs
+        _log_memory(f"after model {model_idx}/{len(models)} ({model})")
+        gc.collect()
+        _log_memory(f"after gc.collect()")
 
     # Print cross-model summary table
     scenario_names = [s.name for s in scenarios]
@@ -634,7 +669,8 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
                 return f"{passed}/{total}"
         return "-"
 
-    sep = "=" * (model_col + col_w * len(scenario_names) + col_w + 2)
+    tok_col = 14  # width for token column
+    sep = "=" * (model_col + col_w * len(scenario_names) + col_w + tok_col + 2)
     thin = "-" * len(sep)
 
     print(f"\n{sep}")
@@ -647,6 +683,7 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
         label = sn[:col_w - 1]
         header += f"{label:>{col_w}}"
     header += f"{'TOTAL':>{col_w}}"
+    header += f"{'TOKENS':>{tok_col}}"
     print(header)
     print(thin)
 
@@ -654,16 +691,18 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
     for model, model_results in results_by_model.items():
         if not model_results:
             row = f"{model[:model_col - 1]:<{model_col}}"
-            row += f"{'SKIPPED':>{col_w * len(scenario_names) + col_w}}"
+            row += f"{'SKIPPED':>{col_w * len(scenario_names) + col_w + tok_col}}"
             print(row)
             continue
         total_tasks = sum(len(r.task_results) for r in model_results)
         total_passed = sum(sum(1 for t in r.task_results if t.success) for r in model_results)
+        total_tokens = sum(r.total_tokens for r in model_results)
         pct = 100.0 * total_passed / total_tasks if total_tasks else 0.0
         row = f"{model[:model_col - 1]:<{model_col}}"
         for sn in scenario_names:
             row += f"{_cell(model_results, sn):>{col_w}}"
         row += f"{f'{total_passed}/{total_tasks} ({pct:.0f}%)':>{col_w}}"
+        row += f"{total_tokens:>{tok_col},}"
         print(row)
 
     # Scenario totals row (across all models that completed)
@@ -682,7 +721,9 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
         grand_tasks += st
         totals_row += f"{f'{sp}/{st}':>{col_w}}"
     grand_pct = 100.0 * grand_passed / grand_tasks if grand_tasks else 0.0
+    grand_tokens = sum(r.total_tokens for mrs in results_by_model.values() for r in mrs)
     totals_row += f"{f'{grand_passed}/{grand_tasks} ({grand_pct:.0f}%)':>{col_w}}"
+    totals_row += f"{grand_tokens:>{tok_col},}"
     print(totals_row)
     print(sep)
 
@@ -713,11 +754,21 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
                             sum(r.average_accuracy for r in model_results) / len(model_results)
                             if model_results else 0.0
                         ),
+                        "total_input_tokens": sum(r.total_input_tokens for r in model_results),
+                        "total_output_tokens": sum(r.total_output_tokens for r in model_results),
+                        "total_reasoning_tokens": sum(r.total_reasoning_tokens for r in model_results),
+                        "total_cache_read_tokens": sum(r.total_cache_read_tokens for r in model_results),
+                        "total_tokens": sum(r.total_tokens for r in model_results),
                         "per_scenario": {
                             r.scenario_name: {
                                 "tasks_passed": sum(1 for t in r.task_results if t.success),
                                 "total_tasks": len(r.task_results),
                                 "accuracy": r.average_accuracy,
+                                "input_tokens": r.total_input_tokens,
+                                "output_tokens": r.total_output_tokens,
+                                "reasoning_tokens": r.total_reasoning_tokens,
+                                "cache_read_tokens": r.total_cache_read_tokens,
+                                "total_tokens": r.total_tokens,
                             }
                             for r in model_results
                         },

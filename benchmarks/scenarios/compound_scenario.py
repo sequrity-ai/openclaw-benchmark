@@ -78,7 +78,7 @@ class CompoundScenario(ScenarioBase):
         super().__init__(
             name="Compound",
             description="Tests agent's ability to chain multiple skills (weather, web, GitHub, summarize) in single tasks",
-            required_skills=["steipete/weather", "tavily-search", "steipete/github", "steipete/summarize"],
+            required_skills=["weather", "tavily-search", "github", "summarize"],
         )
 
         self.validator = CompoundValidator()

@@ -90,7 +90,7 @@ class GitHubScenario(ScenarioBase):
         super().__init__(
             name="GitHub",
             description="Tests agent's ability to interact with GitHub repos, issues, and PRs",
-            required_skills=["steipete/github"],
+            required_skills=["github"],
         )
 
         self.github_setup = GitHubSetup(github_token)

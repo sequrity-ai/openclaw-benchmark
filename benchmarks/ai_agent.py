@@ -20,6 +20,11 @@ class ConversationTurn:
     timestamp: float
     success: bool
     error: str | None = None
+    # Token usage for this turn's bot response
+    input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    cache_read_tokens: int = 0
 
 
 @dataclass
@@ -40,6 +45,22 @@ class ConversationResult:
         self.conversation_turns.append(turn)
         self.total_turns += 1
 
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(t.input_tokens for t in self.conversation_turns)
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(t.output_tokens for t in self.conversation_turns)
+
+    @property
+    def total_reasoning_tokens(self) -> int:
+        return sum(t.reasoning_tokens for t in self.conversation_turns)
+
+    @property
+    def total_cache_read_tokens(self) -> int:
+        return sum(t.cache_read_tokens for t in self.conversation_turns)
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for serialization."""
         return {
@@ -53,6 +74,9 @@ class ConversationResult:
                     "timestamp": turn.timestamp,
                     "success": turn.success,
                     "error": turn.error,
+                    "input_tokens": turn.input_tokens,
+                    "output_tokens": turn.output_tokens,
+                    "reasoning_tokens": turn.reasoning_tokens,
                 }
                 for turn in self.conversation_turns
             ],
@@ -61,6 +85,9 @@ class ConversationResult:
             "completion_reason": self.completion_reason,
             "total_latency": self.total_latency,
             "error_message": self.error_message,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "total_reasoning_tokens": self.total_reasoning_tokens,
         }
 
 
@@ -178,12 +205,21 @@ class BenchmarkAgent:
                     )
 
                     # Send message to bot and wait for response
+                    # 90s allows compound tasks that chain multiple skills to complete
                     bot_response = await session.send_message_async(
-                        user_message, wait_for_response=True, timeout=30.0
+                        user_message, wait_for_response=True, timeout=90.0
                     )
 
                     turn_success = bot_response is not None and bot_response.text
                     bot_text = bot_response.text if bot_response else None
+
+                    # Extract token usage from bot response
+                    input_tokens = output_tokens = reasoning_tokens = cache_read_tokens = 0
+                    if bot_response and hasattr(bot_response, 'token_usage') and bot_response.token_usage:
+                        input_tokens = bot_response.token_usage.input
+                        output_tokens = bot_response.token_usage.output
+                        reasoning_tokens = bot_response.token_usage.reasoning
+                        cache_read_tokens = bot_response.token_usage.cache_read
 
                     if bot_text:
                         logger.info(
@@ -202,6 +238,10 @@ class BenchmarkAgent:
                         timestamp=time.time(),
                         success=turn_success,
                         error=None if turn_success else "No response from bot",
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        reasoning_tokens=reasoning_tokens,
+                        cache_read_tokens=cache_read_tokens,
                     )
                     result.add_turn(turn)
 
