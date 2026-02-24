@@ -122,6 +122,21 @@ evaluate results="benchmark_results.json":
         (.scenarios[] | "  - \(.scenario_name): \(.task_results | map(select(.success)) | length)/\(.task_results | length) tasks passed, \(.average_accuracy | round)% accuracy")
     ' {{results}}
 
+# Analyze sweep log file and generate summary tables
+# Usage: just analyze                          (uses latest sweep log)
+#        just analyze logs/sweep_20250101.log  (specific log file)
+analyze logfile="":
+    #!/usr/bin/env bash
+    if [ -z "{{logfile}}" ]; then
+        uv run python scripts/analyze_sweep.py
+    else
+        if [ ! -f "{{logfile}}" ]; then
+            echo "Error: {{logfile}} not found"
+            exit 1
+        fi
+        uv run python scripts/analyze_sweep.py {{logfile}}
+    fi
+
 # List recent benchmark log files
 logs:
     @ls -lt logs/bench_*.log 2>/dev/null | head -20 || echo "No log files found in logs/"
@@ -177,6 +192,7 @@ info:
     @echo "  just bench all               - Run all benchmarks"
     @echo "  just bench file mode=local   - Run file benchmark (local mode)"
     @echo "  just logs                    - List recent run logs (logs/bench_*.log)"
+    @echo "  just analyze                 - Analyze latest sweep log (pass rates & tokens)"
     @echo "  just evaluate results.json   - Evaluate benchmark results"
     @echo "  just auth                    - Authenticate with Telegram"
     @echo ""
