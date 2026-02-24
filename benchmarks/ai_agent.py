@@ -166,6 +166,11 @@ class BenchmarkAgent:
                 "Do not simplify or paraphrase - include exact file paths, filenames, and all technical requirements."
             )
 
+            # Log the initial context sent to the AI agent
+            logger.info(f"[{task_name}] ===== AI AGENT INITIAL CONTEXT =====")
+            logger.info(f"{initial_context}")
+            logger.info(f"[{task_name}] ========================================")
+
             for turn_num in range(1, self.max_turns + 1):
                 # Check timeout
                 elapsed = time.time() - start_time
@@ -200,9 +205,12 @@ class BenchmarkAgent:
                         user_message = str(agent_response.data).strip()
                     else:
                         user_message = str(agent_response).strip()
-                    logger.info(
-                        f"[{task_name}] Agent message (turn {turn_num}): {user_message[:100]}..."
-                    )
+
+                    # Log FULL user message for debugging
+                    logger.info(f"[{task_name}] ===== TURN {turn_num} REQUEST =====")
+                    logger.info(f"[{task_name}] AI Agent → Bot (full message):")
+                    logger.info(f"{user_message}")
+                    logger.info(f"[{task_name}] ========================================")
 
                     # Send message to bot and wait for response
                     bot_response = await session.send_message_async(
@@ -220,14 +228,15 @@ class BenchmarkAgent:
                         reasoning_tokens = bot_response.token_usage.reasoning
                         cache_read_tokens = bot_response.token_usage.cache_read
 
+                    # Log FULL bot response for debugging
+                    logger.info(f"[{task_name}] ===== TURN {turn_num} RESPONSE =====")
                     if bot_text:
-                        logger.info(
-                            f"[{task_name}] Bot response (turn {turn_num}): {bot_text[:100]}..."
-                        )
+                        logger.info(f"[{task_name}] Bot → AI Agent (full response):")
+                        logger.info(f"{bot_text}")
+                        logger.info(f"[{task_name}] Token usage: in={input_tokens} out={output_tokens} reasoning={reasoning_tokens} cache={cache_read_tokens}")
                     else:
-                        logger.warning(
-                            f"[{task_name}] No bot response on turn {turn_num}"
-                        )
+                        logger.warning(f"[{task_name}] Bot → AI Agent: NO RESPONSE RECEIVED")
+                    logger.info(f"[{task_name}] =========================================")
 
                     # Record turn
                     turn = ConversationTurn(
