@@ -352,8 +352,20 @@ async def run_benchmark_suite_async(config: TelegramConfig, args) -> None:
             logger.warning("Remote mode without SSH credentials - validation will be skipped")
             print("⚠️  Remote mode without SSH credentials - file validation will be skipped")
 
-    # Switch bot model if requested (remote mode only)
-    if config.bot_model and not config.local_mode:
+    # Switch bot model if requested
+    if config.bot_model and config.local_mode:
+        from benchmarks.remote_workspace import LocalModelManager
+        local_manager = LocalModelManager()
+        print(f"Switching bot model to: {config.bot_model}")
+        try:
+            output = local_manager.switch_model(config.bot_model)
+            print(f"Bot model switched to {config.bot_model}")
+            if output:
+                print(f"  {output}")
+        except Exception as e:
+            print(f"WARNING: Failed to switch bot model: {e}")
+            raise
+    elif config.bot_model and not config.local_mode:
         if remote_manager:
             print(f"Switching bot model to: {config.bot_model}")
             try:
@@ -439,8 +451,20 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
             logger.warning("Remote mode without SSH credentials - validation will be skipped")
             print("⚠️  Remote mode without SSH credentials - file validation will be skipped")
 
-    # Switch bot model if requested (remote mode only)
-    if config.bot_model and not config.local_mode:
+    # Switch bot model if requested
+    if config.bot_model and config.local_mode:
+        from benchmarks.remote_workspace import LocalModelManager
+        local_manager = LocalModelManager()
+        print(f"Switching bot model to: {config.bot_model}")
+        try:
+            output = local_manager.switch_model(config.bot_model)
+            print(f"Bot model switched to {config.bot_model}")
+            if output:
+                print(f"  {output}")
+        except Exception as e:
+            print(f"WARNING: Failed to switch bot model: {e}")
+            raise
+    elif config.bot_model and not config.local_mode:
         if remote_manager:
             print(f"Switching bot model to: {config.bot_model}")
             try:

@@ -717,6 +717,15 @@ format = json
         if exit_code != 0:
             raise RuntimeError(f"Failed to switch model to {model!r}: {output}")
         logger.info(f"Model switched to {model}: {output}")
+
+        # Clear fallbacks so benchmarks only use the specified model
+        cmd_clear = f'env {_OPENCLAW_ENV} openclaw models fallbacks clear'
+        exit_code2, stdout2, stderr2 = self._exec_command(cmd_clear)
+        if exit_code2 == 0:
+            logger.info("Cleared model fallbacks for benchmark isolation")
+        else:
+            logger.warning(f"Could not clear fallbacks: {(stdout2 + stderr2).strip()}")
+
         return output
 
     def remote_cleanup(self) -> bool:
@@ -882,4 +891,20 @@ class LocalModelManager:
         if result.returncode != 0:
             raise RuntimeError(f"Failed to switch model to {model!r}: {output}")
         logger.info(f"Model switched to {model}: {output}")
+
+        # Clear fallbacks so benchmarks only use the specified model
+        try:
+            clear_result = subprocess.run(
+                ["openclaw", "models", "fallbacks", "clear"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if clear_result.returncode == 0:
+                logger.info("Cleared model fallbacks for benchmark isolation")
+            else:
+                logger.warning(f"Could not clear fallbacks: {(clear_result.stdout + clear_result.stderr).strip()}")
+        except Exception as e:
+            logger.warning(f"Could not clear fallbacks: {e}")
+
         return output

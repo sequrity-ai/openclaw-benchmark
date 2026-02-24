@@ -139,7 +139,7 @@ class BenchmarkAgent:
         )
 
     async def run_conversation_async(
-        self, task_name: str, task_description: str, session: Any
+        self, task_name: str, task_description: str, session: Any, task_timeout: float = 90.0
     ) -> ConversationResult:
         """Run a multi-turn conversation to accomplish a task.
 
@@ -205,9 +205,8 @@ class BenchmarkAgent:
                     )
 
                     # Send message to bot and wait for response
-                    # 90s allows compound tasks that chain multiple skills to complete
                     bot_response = await session.send_message_async(
-                        user_message, wait_for_response=True, timeout=90.0
+                        user_message, wait_for_response=True, timeout=task_timeout
                     )
 
                     turn_success = bot_response is not None and bot_response.text
@@ -288,7 +287,7 @@ class BenchmarkAgent:
         return result
 
     def run_conversation_sync(
-        self, task_name: str, task_description: str, session: Any
+        self, task_name: str, task_description: str, session: Any, task_timeout: float = 90.0
     ) -> ConversationResult:
         """Run a multi-turn conversation synchronously.
 
@@ -298,6 +297,7 @@ class BenchmarkAgent:
             task_name: Name of the task
             task_description: Description of what the user should accomplish
             session: TelegramSession or LocalSession for sending messages
+            task_timeout: Timeout per message send in seconds
 
         Returns:
             Conversation result
@@ -306,7 +306,7 @@ class BenchmarkAgent:
 
         # Run the async method synchronously using asyncio.run()
         return asyncio.run(
-            self.run_conversation_async(task_name, task_description, session)
+            self.run_conversation_async(task_name, task_description, session, task_timeout=task_timeout)
         )
 
     def _build_context(

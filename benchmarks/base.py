@@ -349,29 +349,27 @@ class ScenarioBase(ABC):
             # Fresh session per task — prevents context from previous tasks leaking in
             session = _create_session(client, bot_identifier)
 
-            # Send /new to reset bot conversation context (Telegram mode only)
-            from telegram_client import TelegramSession
-            if isinstance(session, TelegramSession):
-                session_reset_ok = False
-                try:
-                    logger.info(f"[{run_id}] Sending /new to reset bot session context")
-                    response = await session.send_message_async("/new", wait_for_response=True, timeout=15.0)
+            # Send /new to reset bot conversation context (resets Sequrity session ID too)
+            session_reset_ok = False
+            try:
+                logger.info(f"[{run_id}] Sending /new to reset session context")
+                response = await session.send_message_async("/new", wait_for_response=True, timeout=90.0)
+                if response:
+                    logger.info(f"[{run_id}] Session reset confirmed: {response.text[:80] if response.text else '(empty)'}")
+                    session_reset_ok = True
+                else:
+                    logger.warning(f"[{run_id}] No response to /new within 30s, retrying")
+                    response = await session.send_message_async("/new", wait_for_response=True, timeout=90.0)
                     if response:
-                        logger.info(f"[{run_id}] Bot confirmed session reset: {response.text[:80]}")
+                        logger.info(f"[{run_id}] Session reset confirmed on retry: {response.text[:80] if response.text else '(empty)'}")
                         session_reset_ok = True
                     else:
-                        logger.warning(f"[{run_id}] No response to /new within 15s, retrying with 30s timeout")
-                        response = await session.send_message_async("/new", wait_for_response=True, timeout=30.0)
-                        if response:
-                            logger.info(f"[{run_id}] Bot confirmed session reset on retry: {response.text[:80]}")
-                            session_reset_ok = True
-                        else:
-                            logger.error(
-                                f"[{run_id}] /new got no response after retry — "
-                                f"session context may NOT be clean for task: {task.name}"
-                            )
-                except Exception as e:
-                    logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
+                        logger.error(
+                            f"[{run_id}] /new got no response after retry — "
+                            f"session context may NOT be clean for task: {task.name}"
+                        )
+            except Exception as e:
+                logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
 
             try:
                 # Multi-turn conversation mode with AI agent
@@ -379,10 +377,12 @@ class ScenarioBase(ABC):
                 logger.info(f"[{run_id}] Task description: {task.expected_output_description}")
 
                 # Run the conversation (pass full prompt, not just expected output description)
+                effective_timeout = task.timeout * timeout_multiplier
                 conversation_result: ConversationResult = await ai_agent.run_conversation_async(
                     task_name=task.name,
                     task_description=task.prompt,  # Use full prompt with all details
                     session=session,
+                    task_timeout=effective_timeout,
                 )
 
                 task_latency = conversation_result.total_latency
@@ -576,39 +576,39 @@ class ScenarioBase(ABC):
             # Fresh session per task — prevents context from previous tasks leaking in
             session = _create_session(client, bot_identifier)
 
-            # Send /new to reset bot conversation context (Telegram mode only)
-            from telegram_client import TelegramSession
-            if isinstance(session, TelegramSession):
-                session_reset_ok = False
-                try:
-                    logger.info(f"[{run_id}] Sending /new to reset bot session context")
-                    response = session.send_message_sync("/new", wait_for_response=True, timeout=15.0)
+            # Send /new to reset bot conversation context (resets Sequrity session ID too)
+            session_reset_ok = False
+            try:
+                logger.info(f"[{run_id}] Sending /new to reset session context")
+                response = session.send_message_sync("/new", wait_for_response=True, timeout=90.0)
+                if response:
+                    logger.info(f"[{run_id}] Session reset confirmed: {response.text[:80] if response.text else '(empty)'}")
+                    session_reset_ok = True
+                else:
+                    logger.warning(f"[{run_id}] No response to /new within 30s, retrying")
+                    response = session.send_message_sync("/new", wait_for_response=True, timeout=90.0)
                     if response:
-                        logger.info(f"[{run_id}] Bot confirmed session reset: {response.text[:80]}")
+                        logger.info(f"[{run_id}] Session reset confirmed on retry: {response.text[:80] if response.text else '(empty)'}")
                         session_reset_ok = True
                     else:
-                        logger.warning(f"[{run_id}] No response to /new within 15s, retrying with 30s timeout")
-                        response = session.send_message_sync("/new", wait_for_response=True, timeout=30.0)
-                        if response:
-                            logger.info(f"[{run_id}] Bot confirmed session reset on retry: {response.text[:80]}")
-                            session_reset_ok = True
-                        else:
-                            logger.error(
-                                f"[{run_id}] /new got no response after retry — "
-                                f"session context may NOT be clean for task: {task.name}"
-                            )
-                except Exception as e:
-                    logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
+                        logger.error(
+                            f"[{run_id}] /new got no response after retry — "
+                            f"session context may NOT be clean for task: {task.name}"
+                        )
+            except Exception as e:
+                logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
 
             try:
                 # Multi-turn conversation mode with AI agent (sync wrapper)
                 logger.info(f"[{run_id}] Starting multi-turn conversation for task: {task.name}")
 
                 # Run the conversation using sync wrapper (pass full prompt, not just expected output description)
+                effective_timeout = task.timeout * timeout_multiplier
                 conversation_result: ConversationResult = ai_agent.run_conversation_sync(
                     task_name=task.name,
                     task_description=task.prompt,
                     session=session,
+                    task_timeout=effective_timeout,
                 )
 
                 task_latency = conversation_result.total_latency
