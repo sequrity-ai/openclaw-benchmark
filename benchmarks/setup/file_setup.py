@@ -67,6 +67,17 @@ any blockers that have come up.
         with open(self.notes_txt_path, "w") as f:
             f.write(notes_content)
 
+        # Pre-create users/{name}/profile.txt so Tasks 2 and 3 are isolated
+        # (Task 1 also creates these; Tasks 2 & 3 must not depend on Task 1 succeeding)
+        users_dir = self.workspace_dir / "users"
+        for user in sample_data["users"]:
+            user_dir = users_dir / user["name"]
+            user_dir.mkdir(parents=True, exist_ok=True)
+            profile = user_dir / "profile.txt"
+            profile.write_text(
+                f"Email: {user['email']}\nRole: {user['role']}\nAction Items: 1\n"
+            )
+
         # MEDIUM Task 1: Create nested log files for recursive search
         logs_dir = self.workspace_dir / "logs"
         logs_dir.mkdir(exist_ok=True)

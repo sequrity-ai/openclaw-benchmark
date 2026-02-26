@@ -59,11 +59,31 @@ AI_AGENT_MODEL=gpt-4o-mini
 # Tavily (for Web Search scenario validation - fetches ground truth)
 TAVILY_API_KEY=tvly-...
 
-# GitHub (for GitHub + Compound scenarios)
-GITHUB_TOKEN=ghp_...
-GITHUB_TEST_REPO_OWNER=your-org-or-username
+# GitHub (for GitHub + Compound scenarios) — use a dedicated benchmark account
+GITHUB_TOKEN=gho_...
+GITHUB_TEST_REPO_OWNER=aaronzhaoopenclawbenchmark-code
 GITHUB_TEST_REPO_NAME=openclaw-sandbox
 ```
+
+### Optional `.env` variables (custom bot prompt injection)
+
+```bash
+# Path to the bot's workspace directory (where SOUL.md lives)
+BOT_WORKSPACE_DIR=~/.openclaw/workspace
+
+# Path to a file whose contents replace SOUL.md during the benchmark run.
+# The original SOUL.md is backed up and restored automatically after the run.
+# Leave empty to use the bot's existing SOUL.md unchanged.
+CUSTOM_BOT_PROMPT_FILE=./my_custom_prompt.md
+```
+
+When `CUSTOM_BOT_PROMPT_FILE` is set, the benchmark will:
+1. Back up the bot's existing `SOUL.md` to `SOUL.md.benchmark_backup`
+2. Write the contents of your custom prompt file as the new `SOUL.md`
+3. Run all scenarios (the bot picks up the new persona/instructions automatically)
+4. Restore the original `SOUL.md` when done (even if the benchmark crashes)
+
+This lets you test how different system prompts affect benchmark scores without rebuilding the bot.
 
 ### Optional `.env` variables (for Gmail scenario)
 
@@ -141,9 +161,10 @@ The GitHub and Compound scenarios need a test repository that gets seeded with b
 
 ### Create the repo
 
-1. Create a **public** GitHub repository (e.g., `your-org/openclaw-sandbox`)
-2. Set `GITHUB_TEST_REPO_OWNER` and `GITHUB_TEST_REPO_NAME` in `.env`
-3. The benchmark's setup phase automatically seeds the repo with:
+1. Create a **private** GitHub repository under a dedicated benchmark account (e.g., `aaronzhaoopenclawbenchmark-code/openclaw-sandbox`)
+2. Authenticate `gh` CLI to the benchmark account: `gh auth login`
+3. Set `GITHUB_TEST_REPO_OWNER` and `GITHUB_TEST_REPO_NAME` in `.env`
+4. The benchmark's setup phase automatically seeds the repo with:
    - README.md
    - `src/utils.js` (with `fetchData()` and `processItems()` functions)
    - 5 JS source files with commit history
@@ -152,11 +173,22 @@ The GitHub and Compound scenarios need a test repository that gets seeded with b
    - Label `benchmark-seed`
    - 3 seeded issues
 
+**Important**: The repo **must** be private. `seed_repo_data()` enforces this and will refuse to seed a public repository. Use a dedicated throwaway account — never use your main GitHub account.
+
+### Current benchmark repo
+
+- Account: `aaronzhaoopenclawbenchmark-code`
+- Repo: `openclaw-sandbox` (private)
+- Auth: `gh` CLI logged in to the benchmark account
+
 ### Security warning
 
-**Do NOT give the bot's GitHub token write access to repos with sensitive data.** The benchmark tasks ask the bot to create GitHub issues. If the bot's `exec` tool has unescaped shell arguments, environment variables (including API keys) can leak into issue bodies. Use a dedicated throwaway repo.
+**Do NOT give the bot's GitHub token write access to repos with sensitive data.** The benchmark tasks ask the bot to create GitHub issues. If the bot's `exec` tool has unescaped shell arguments, environment variables (including API keys) can leak into issue bodies.
 
-See [Security Considerations](#9-security-considerations) for details.
+A `SecretScanner` validation layer (see [Security Considerations](#9-security-considerations)) now guards against leaks at three levels:
+1. **Pre-send**: Blocks setup API writes containing secrets
+2. **Post-response**: Scans agent response text for leaked keys
+3. **Post-hoc**: Fetches GitHub issue bodies, redacts and closes if secrets are found
 
 ---
 
@@ -411,11 +443,35 @@ just analyze logs/sweep.log    # Analyze specific log file
 
 **Real incident**: Sequrity AI generated `gh issue create -b "...store them in a \`set\` and remove..."` — the `` `set` `` was executed by bash, dumping all env vars into a public GitHub issue.
 
-**Mitigations**:
-1. Use a dedicated throwaway GitHub repo for benchmarks
-2. Rotate all API keys after any benchmark run that creates GitHub issues
-3. Consider running the gateway with minimal env vars
-4. OpenClaw should sanitize sensitive env vars before passing to `exec` child processes (currently only blocks `LD_PRELOAD`-style vars, not API keys)
+### SecretScanner validation layer (`benchmarks/security.py`)
+
+A three-layer defence added after the Sequrity AI incident. It detects and blocks leaked API keys, tokens, and env var dumps.
+
+**Detected patterns**:
+- `sk-proj-*` (OpenAI), `sk-or-v1-*` (OpenRouter), `ghp_*` / `github_pat_*` (GitHub PATs)
+- `gho_` / `ghu_` / `ghs_` / `ghr_` (GitHub OAuth/user/server/refresh tokens)
+- `tvly-*` (Tavily), `xai-*` (xAI)
+- `OPENAI_API_KEY=...` style env var assignments
+- `Bearer <token>` and `token <token>` auth headers
+- Standalone hex strings (32-64 chars) from env dumps
+
+**Three layers**:
+
+| Layer | Where | What happens |
+|-------|-------|-------------|
+| **Pre-send guard** | `github_setup._make_request()`, `gmail_setup._make_request()` | Scans POST/PUT/PATCH payloads before sending. Raises `ValueError` if secrets found — request never leaves the machine. |
+| **Post-response scan** | `base.py` after agent conversation | Scans concatenated bot response text. Flags `secrets_leaked: True` in `validation_details`. |
+| **Post-hoc cleanup** | `base.py` for issue-creating tasks | Fetches GitHub issue body via API. If secrets found: replaces body with `[REDACTED]`, closes the issue, marks task as failed. |
+
+**Issue-creating task categories** (post-hoc scanned): `issue_create`, `weather_github`, `web_github`, `three_skill_chain`, `research_summarize_github`.
+
+### Other mitigations
+
+1. **Private repo only** — `seed_repo_data()` refuses to seed public repos
+2. **Dedicated benchmark account** — use a throwaway GitHub account, not your main one
+3. Rotate all API keys after any benchmark run that creates GitHub issues
+4. Consider running the gateway with minimal env vars
+5. OpenClaw should sanitize sensitive env vars before passing to `exec` child processes (currently only blocks `LD_PRELOAD`-style vars, not API keys)
 
 ### Benchmark fairness
 
@@ -478,6 +534,7 @@ opencalw-sandbox/
 ├── benchmarks/
 │   ├── base.py                     # ScenarioBase, BenchmarkTask, task runner
 │   ├── ai_agent.py                 # AI agent (user simulator) using Pydantic AI
+│   ├── security.py                 # SecretScanner — leak detection & redaction
 │   ├── skill_checker.py            # Detect installed OpenClaw skills
 │   ├── scenario_factory.py         # Creates scenario instances
 │   ├── remote_workspace.py         # SSH workspace + model switching

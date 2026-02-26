@@ -30,6 +30,71 @@ from telegram_client import TelegramClient
 logger = logging.getLogger(__name__)
 
 
+def _inject_custom_soul(config: TelegramConfig) -> str | None:
+    """Inject custom prompt into the bot's SOUL.md, backing up the original.
+
+    Returns the path to the backup file, or None if no injection was needed.
+    """
+    if not config.custom_bot_prompt_file:
+        return None
+
+    prompt_file = Path(config.custom_bot_prompt_file).expanduser().resolve()
+    if not prompt_file.is_file():
+        logger.warning(f"Custom bot prompt file not found: {prompt_file}")
+        print(f"WARNING: CUSTOM_BOT_PROMPT_FILE not found: {prompt_file}")
+        return None
+
+    workspace = Path(config.bot_workspace_dir).expanduser().resolve()
+    soul_path = workspace / "SOUL.md"
+    backup_path = workspace / "SOUL.md.benchmark_backup"
+
+    # Read custom prompt content
+    custom_content = prompt_file.read_text(encoding="utf-8")
+
+    # Back up existing SOUL.md if it exists
+    if soul_path.exists():
+        original_content = soul_path.read_text(encoding="utf-8")
+        backup_path.write_text(original_content, encoding="utf-8")
+        logger.info(f"Backed up existing SOUL.md to {backup_path}")
+    else:
+        # No existing SOUL.md — create a sentinel so restore knows to delete
+        backup_path.write_text("", encoding="utf-8")
+        logger.info("No existing SOUL.md — will remove after benchmark")
+
+    # Write custom prompt as SOUL.md
+    soul_path.write_text(custom_content, encoding="utf-8")
+    logger.info(f"Injected custom bot prompt from {prompt_file} into {soul_path}")
+    print(f"Custom bot prompt: injected {prompt_file} -> {soul_path}")
+
+    return str(backup_path)
+
+
+def _restore_soul(config: TelegramConfig, backup_path: str | None) -> None:
+    """Restore the original SOUL.md from backup."""
+    if backup_path is None:
+        return
+
+    workspace = Path(config.bot_workspace_dir).expanduser().resolve()
+    soul_path = workspace / "SOUL.md"
+    bp = Path(backup_path)
+
+    if not bp.exists():
+        logger.warning(f"Backup file missing, cannot restore SOUL.md: {bp}")
+        return
+
+    backup_content = bp.read_text(encoding="utf-8")
+    if backup_content == "":
+        # Sentinel: original SOUL.md didn't exist, remove injected one
+        soul_path.unlink(missing_ok=True)
+        logger.info("Removed injected SOUL.md (no original existed)")
+    else:
+        soul_path.write_text(backup_content, encoding="utf-8")
+        logger.info(f"Restored original SOUL.md from {bp}")
+
+    bp.unlink(missing_ok=True)
+    print("Custom bot prompt: restored original SOUL.md")
+
+
 def setup_logging(verbose: bool = False) -> None:
     """Set up logging configuration.
 
@@ -402,31 +467,37 @@ async def run_benchmark_suite_async(config: TelegramConfig, args) -> None:
     )
     print(f"Multi-turn mode: max {config.max_conversation_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
 
-    client_cls = LocalClient if config.local_mode else TelegramClient
-    async with client_cls(config) as client:
-        all_results = []
+    # Inject custom bot prompt (SOUL.md) if configured
+    soul_backup = _inject_custom_soul(config)
 
-        # Determine bot identifier based on client type
-        bot_identifier = args.chat_id if config.local_mode else config.openclaw_bot_username
+    try:
+        client_cls = LocalClient if config.local_mode else TelegramClient
+        async with client_cls(config) as client:
+            all_results = []
 
-        for i, scenario in enumerate(scenarios, 1):
-            print(f"\n[{i}/{len(scenarios)}] Running scenario: {scenario.name}")
-            print(f"Description: {scenario.description}")
-            skills_label = ", ".join(scenario.required_skills) or "(core tools only)"
-            print(f"Required skills: {skills_label}\n")
+            # Determine bot identifier based on client type
+            bot_identifier = args.chat_id if config.local_mode else config.openclaw_bot_username
 
-            result = await scenario.run_async(
-                client,
-                bot_identifier,
-                skip_setup=args.no_setup,
-                timeout_multiplier=config.timeout_multiplier,
-                ai_agent=ai_agent,
-            )
-            all_results.append(result)
-            _print_scenario_result(result, i, len(scenarios))
+            for i, scenario in enumerate(scenarios, 1):
+                print(f"\n[{i}/{len(scenarios)}] Running scenario: {scenario.name}")
+                print(f"Description: {scenario.description}")
+                skills_label = ", ".join(scenario.required_skills) or "(core tools only)"
+                print(f"Required skills: {skills_label}\n")
 
-        if args.output:
-            _export_results(config, all_results, args.output)
+                result = await scenario.run_async(
+                    client,
+                    bot_identifier,
+                    skip_setup=args.no_setup,
+                    timeout_multiplier=config.timeout_multiplier,
+                    ai_agent=ai_agent,
+                )
+                all_results.append(result)
+                _print_scenario_result(result, i, len(scenarios))
+
+            if args.output:
+                _export_results(config, all_results, args.output)
+    finally:
+        _restore_soul(config, soul_backup)
 
 
 def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
@@ -501,31 +572,37 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
     )
     print(f"Multi-turn mode (sync): max {config.max_conversation_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
 
-    client_cls = LocalClient if config.local_mode else TelegramClient
-    with client_cls(config) as client:
-        all_results = []
+    # Inject custom bot prompt (SOUL.md) if configured
+    soul_backup = _inject_custom_soul(config)
 
-        # Determine bot identifier based on client type
-        bot_identifier = args.chat_id if config.local_mode else config.openclaw_bot_username
+    try:
+        client_cls = LocalClient if config.local_mode else TelegramClient
+        with client_cls(config) as client:
+            all_results = []
 
-        for i, scenario in enumerate(scenarios, 1):
-            print(f"\n[{i}/{len(scenarios)}] Running scenario: {scenario.name}")
-            print(f"Description: {scenario.description}")
-            skills_label = ", ".join(scenario.required_skills) or "(core tools only)"
-            print(f"Required skills: {skills_label}\n")
+            # Determine bot identifier based on client type
+            bot_identifier = args.chat_id if config.local_mode else config.openclaw_bot_username
 
-            result = scenario.run_sync(
-                client,
-                bot_identifier,
-                skip_setup=args.no_setup,
-                timeout_multiplier=config.timeout_multiplier,
-                ai_agent=ai_agent,
-            )
-            all_results.append(result)
-            _print_scenario_result(result, i, len(scenarios))
+            for i, scenario in enumerate(scenarios, 1):
+                print(f"\n[{i}/{len(scenarios)}] Running scenario: {scenario.name}")
+                print(f"Description: {scenario.description}")
+                skills_label = ", ".join(scenario.required_skills) or "(core tools only)"
+                print(f"Required skills: {skills_label}\n")
 
-        if args.output:
-            _export_results(config, all_results, args.output)
+                result = scenario.run_sync(
+                    client,
+                    bot_identifier,
+                    skip_setup=args.no_setup,
+                    timeout_multiplier=config.timeout_multiplier,
+                    ai_agent=ai_agent,
+                )
+                all_results.append(result)
+                _print_scenario_result(result, i, len(scenarios))
+
+            if args.output:
+                _export_results(config, all_results, args.output)
+    finally:
+        _restore_soul(config, soul_backup)
 
 
 def _log_memory(label: str = "") -> None:
@@ -624,54 +701,60 @@ async def run_benchmark_sweep_async(config: TelegramConfig, args) -> None:
     print(f"AI Agent:  {config.ai_agent_model}")
     print(f"{'='*70}\n")
 
+    # Inject custom bot prompt (SOUL.md) if configured
+    soul_backup = _inject_custom_soul(config)
+
     results_by_model: dict[str, list] = {}
 
-    for model_idx, model in enumerate(models, 1):
-        print(f"\n{'#'*70}")
-        print(f"MODEL [{model_idx}/{len(models)}]: {model}")
-        print(f"{'#'*70}")
+    try:
+        for model_idx, model in enumerate(models, 1):
+            print(f"\n{'#'*70}")
+            print(f"MODEL [{model_idx}/{len(models)}]: {model}")
+            print(f"{'#'*70}")
 
-        # Switch bot to this model
-        try:
-            print(f"Switching bot to model: {model}")
-            output = manager.switch_model(model)
-            print(f"Model switched successfully.")
-            if output:
-                print(f"  {output}")
-        except Exception as e:
-            print(f"WARNING: Failed to switch to model {model}: {e}")
-            print("Skipping this model.")
-            results_by_model[model] = []
-            continue
+            # Switch bot to this model
+            try:
+                print(f"Switching bot to model: {model}")
+                output = manager.switch_model(model)
+                print(f"Model switched successfully.")
+                if output:
+                    print(f"  {output}")
+            except Exception as e:
+                print(f"WARNING: Failed to switch to model {model}: {e}")
+                print("Skipping this model.")
+                results_by_model[model] = []
+                continue
 
-        # Run all scenarios for this model
-        model_results = []
-        async with client_cls(config) as client:
-            for i, scenario in enumerate(scenarios, 1):
-                # Re-set model before each scenario (gateway may auto-rotate primary)
-                try:
-                    manager.switch_model(model)
-                except Exception as e:
-                    print(f"    WARNING: Could not re-set model before scenario: {e}")
-                print(f"\n  [{i}/{len(scenarios)}] Scenario: {scenario.name}")
-                result = await scenario.run_async(
-                    client,
-                    bot_identifier,
-                    skip_setup=args.no_setup,
-                    timeout_multiplier=config.timeout_multiplier,
-                    ai_agent=ai_agent,
-                )
-                model_results.append(result)
-                passed = sum(1 for t in result.task_results if t.success)
-                print(f"    Result: {passed}/{len(result.task_results)} tasks passed, {result.average_accuracy:.1f}% accuracy, tokens: {result.total_tokens:,}")
-                gc.collect()  # free memory between scenarios
+            # Run all scenarios for this model
+            model_results = []
+            async with client_cls(config) as client:
+                for i, scenario in enumerate(scenarios, 1):
+                    # Re-set model before each scenario (gateway may auto-rotate primary)
+                    try:
+                        manager.switch_model(model)
+                    except Exception as e:
+                        print(f"    WARNING: Could not re-set model before scenario: {e}")
+                    print(f"\n  [{i}/{len(scenarios)}] Scenario: {scenario.name}")
+                    result = await scenario.run_async(
+                        client,
+                        bot_identifier,
+                        skip_setup=args.no_setup,
+                        timeout_multiplier=config.timeout_multiplier,
+                        ai_agent=ai_agent,
+                    )
+                    model_results.append(result)
+                    passed = sum(1 for t in result.task_results if t.success)
+                    print(f"    Result: {passed}/{len(result.task_results)} tasks passed, {result.average_accuracy:.1f}% accuracy, tokens: {result.total_tokens:,}")
+                    gc.collect()  # free memory between scenarios
 
-        results_by_model[model] = model_results
+            results_by_model[model] = model_results
 
-        # Free memory between model runs
-        _log_memory(f"after model {model_idx}/{len(models)} ({model})")
-        gc.collect()
-        _log_memory(f"after gc.collect()")
+            # Free memory between model runs
+            _log_memory(f"after model {model_idx}/{len(models)} ({model})")
+            gc.collect()
+            _log_memory(f"after gc.collect()")
+    finally:
+        _restore_soul(config, soul_backup)
 
     # Print cross-model summary table
     scenario_names = [s.name for s in scenarios]

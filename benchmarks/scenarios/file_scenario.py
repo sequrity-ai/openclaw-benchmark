@@ -66,20 +66,19 @@ class FileScenario(ScenarioBase):
     def _define_tasks(self) -> None:
         """Define the 9 file manipulation tasks with progressive complexity."""
 
-        # Task 1: File Organization - Create directory structure
+        # Task 1: File Organization - Organize sales data by region
         self.add_task(
             BenchmarkTask(
                 name="File Organization",
                 prompt=(
-                    f"Read the user data from {self.file_setup.data_json_path}. "
-                    f"For each user, create a directory named 'users/{{name}}/' under {self.file_setup.workspace_dir}, "
-                    "where {{name}} is the user's name (e.g., 'Alice Johnson'). "
-                    "In each user directory, create a file called 'profile.txt' containing their email and role, "
-                    "formatted as:\n"
-                    "Email: {{email}}\n"
-                    "Role: {{role}}"
+                    f"Read {self.file_setup.workspace_dir}/sales_data.csv. "
+                    f"Create a directory called 'by_region/' under {self.file_setup.workspace_dir}. "
+                    "For each unique region in the data, create a sub-directory named after the region "
+                    "(e.g., 'by_region/North/', 'by_region/South/'). "
+                    "In each region directory, create a file called 'sales.csv' containing ONLY the rows "
+                    "for that region, with the same CSV header (product,quantity,price,region)."
                 ),
-                expected_output_description="Directory structure: users/{name}/profile.txt for each user",
+                expected_output_description="by_region/{region}/sales.csv for each region with filtered rows",
                 validation_fn=self.validator.validate_file_organization,
                 timeout=60.0,
                 metadata={"difficulty": "easy", "category": "file_organization"},
@@ -95,8 +94,9 @@ class FileScenario(ScenarioBase):
                     f"Read {self.file_setup.notes_txt_path} to count how many action items each person has. "
                     "Count ONLY action items explicitly assigned to each person by their name (e.g., 'Alice:', 'Bob:', 'Carol:'). "
                     "Do NOT count action items assigned to 'Everyone' or group names. "
-                    f"Then update each profile.txt file in the users/ directories to add a new line at the end: "
-                    "'Action Items: X' where X is the count of action items for that specific person. "
+                    f"Then update each profile.txt file in {self.file_setup.workspace_dir}/users/ directories "
+                    "to set the 'Action Items: X' line where X is the correct count of action items for that person. "
+                    "The profile.txt files already exist with Email, Role, and an Action Items line that may need correcting. "
                     "If a user has no action items explicitly assigned to them by name, use 0."
                 ),
                 expected_output_description="Updated profile.txt files with action item counts",
@@ -112,9 +112,11 @@ class FileScenario(ScenarioBase):
             BenchmarkTask(
                 name="File Consolidation",
                 prompt=(
-                    f"Find all profile.txt files in the users/ directories under {self.file_setup.workspace_dir}. "
+                    f"Find all profile.txt files in {self.file_setup.workspace_dir}/users/ directories. "
+                    "Each profile.txt contains Email, Role, and Action Items lines. "
                     f"Read each profile and create a CSV file named 'users_summary.csv' in {self.file_setup.workspace_dir} "
                     "with columns: name, email, role, action_count. "
+                    "The name should be the directory name (e.g., 'Alice Johnson'). "
                     "Sort the rows by action_count in descending order (highest first)."
                 ),
                 expected_output_description="CSV file with aggregated user data sorted by action count",

@@ -53,6 +53,7 @@ from benchmarks.base import (
     ScenarioBase,
     SetupResult,
 )
+from benchmarks.setup.github_setup import GitHubSetup
 from benchmarks.skill_checker import check_skills
 from benchmarks.validators.compound_validator import CompoundValidator
 
@@ -81,6 +82,8 @@ class CompoundScenario(ScenarioBase):
             required_skills=["weather", "tavily-search", "github", "summarize"],
         )
 
+        self.github_token = github_token
+        self.github_setup = GitHubSetup(github_token)
         self.validator = CompoundValidator()
         self.test_repo_owner = test_repo_owner
         self.test_repo_name = test_repo_name
@@ -130,7 +133,7 @@ class CompoundScenario(ScenarioBase):
             BenchmarkTask(
                 name="GitHub + Summarize",
                 prompt=(
-                    f"Read the file `src/utils.js` from the GitHub repository "
+                    f"Read the file src/utils.js from the GitHub repository "
                     f"{self.test_repo_owner}/{self.test_repo_name}. "
                     f"Then summarize its purpose: what does the file do, what functions does it define, "
                     f"and what problem does it solve?"
@@ -286,6 +289,38 @@ class CompoundScenario(ScenarioBase):
                     status=CheckStatus.PASS,
                     message=f"Tavily API key configured ({tavily_api_key[:10]}...)",
                     details={"validation_method": "tavily_api"},
+                )
+            )
+
+        # Enforce private repository
+        try:
+            repo_info = self.github_setup.get_repo_info(self.test_repo_owner, self.test_repo_name)
+            if repo_info.get("private") is True:
+                checks.append(
+                    HealthCheckResult(
+                        check_name="Private Repository Check",
+                        status=CheckStatus.PASS,
+                        message=f"Repository {self.test_repo_owner}/{self.test_repo_name} is private",
+                    )
+                )
+            else:
+                checks.append(
+                    HealthCheckResult(
+                        check_name="Private Repository Check",
+                        status=CheckStatus.FAIL,
+                        message="Repository must be private for benchmark safety",
+                        details={
+                            "test_repo": f"{self.test_repo_owner}/{self.test_repo_name}",
+                            "fix": "Change the repository visibility to private in GitHub settings",
+                        },
+                    )
+                )
+        except Exception as e:
+            checks.append(
+                HealthCheckResult(
+                    check_name="Private Repository Check",
+                    status=CheckStatus.FAIL,
+                    message=f"Could not verify repository visibility: {e}",
                 )
             )
 

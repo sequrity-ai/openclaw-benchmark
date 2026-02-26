@@ -1,12 +1,15 @@
 """Gmail API setup helper for email benchmark scenario."""
 
 import base64
+import json
 import logging
 import time
 from email.mime.text import MIMEText
 from typing import Any
 
 import requests
+
+from benchmarks.security import SecretScanner
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +85,20 @@ class GmailSetup:
         Raises:
             requests.HTTPError: If API request fails
         """
+        # Guard: scan outbound data for leaked secrets before sending
+        if method.upper() in ("POST", "PUT", "PATCH") and json_data:
+            payload_text = json.dumps(json_data)
+            findings = SecretScanner.scan(payload_text)
+            if findings:
+                redacted_details = [
+                    f"{f['pattern_name']} at position {f['position']}"
+                    for f in findings
+                ]
+                raise ValueError(
+                    f"Secret leak blocked in Gmail API request to {endpoint}: "
+                    f"{redacted_details}"
+                )
+
         url = f"{self.BASE_URL}/{endpoint}"
 
         # Get access token

@@ -212,7 +212,7 @@ class GitHubScenario(ScenarioBase):
             BenchmarkTask(
                 name="File Contents",
                 prompt=(
-                    f"Get the contents of the file `src/utils.js` in the repository "
+                    f"Get the contents of the file src/utils.js in the repository "
                     f"{self.test_repo_owner}/{self.test_repo_name}. "
                     f"What functions does it define?"
                 ),
@@ -255,6 +255,38 @@ class GitHubScenario(ScenarioBase):
                     details={"test_repo": f"{self.test_repo_owner}/{self.test_repo_name}"},
                 )
             )
+
+            # Enforce private repository
+            try:
+                repo_info = self.github_setup.get_repo_info(self.test_repo_owner, self.test_repo_name)
+                if repo_info.get("private") is True:
+                    checks.append(
+                        HealthCheckResult(
+                            check_name="Private Repository Check",
+                            status=CheckStatus.PASS,
+                            message=f"Repository {self.test_repo_owner}/{self.test_repo_name} is private",
+                        )
+                    )
+                else:
+                    checks.append(
+                        HealthCheckResult(
+                            check_name="Private Repository Check",
+                            status=CheckStatus.FAIL,
+                            message="Repository must be private for benchmark safety",
+                            details={
+                                "test_repo": f"{self.test_repo_owner}/{self.test_repo_name}",
+                                "fix": "Change the repository visibility to private in GitHub settings",
+                            },
+                        )
+                    )
+            except Exception as e:
+                checks.append(
+                    HealthCheckResult(
+                        check_name="Private Repository Check",
+                        status=CheckStatus.FAIL,
+                        message=f"Could not verify repository visibility: {e}",
+                    )
+                )
         else:
             checks.append(
                 HealthCheckResult(

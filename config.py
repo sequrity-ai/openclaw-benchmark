@@ -128,6 +128,16 @@ class TelegramConfig(BaseSettings):
         description="OpenClaw bot model to switch to before benchmarking (e.g. anthropic/claude-opus-4-5). Empty = use bot's current model.",
     )
 
+    # Bot workspace / custom prompt injection
+    bot_workspace_dir: str = Field(
+        default="~/.openclaw/workspace",
+        description="Path to the OpenClaw bot workspace directory (where SOUL.md lives)",
+    )
+    custom_bot_prompt_file: str = Field(
+        default="",
+        description="Path to a file whose contents will be injected as SOUL.md in the bot workspace before benchmarking. Empty = leave SOUL.md unchanged.",
+    )
+
     # AI agent settings
     ai_agent_model: str = Field(
         default="gpt-4o-mini",

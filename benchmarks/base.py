@@ -1,6 +1,7 @@
 """Base classes for OpenClaw benchmark scenarios."""
 
 import logging
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -8,6 +9,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from benchmarks.ai_agent import BenchmarkAgent, ConversationResult
+from benchmarks.security import SecretScanner
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +219,113 @@ def _create_session(client: Any, bot_identifier: int | str) -> Any:
 
     # TelegramClient expects bot_username (str)
     return TelegramSession(client, bot_identifier)
+
+
+# Task categories whose agent creates a GitHub issue
+_ISSUE_CREATING_CATEGORIES = frozenset({
+    "issue_create",
+    "weather_github",
+    "web_github",
+    "three_skill_chain",
+    "research_summarize_github",
+})
+
+
+def _scan_response_for_secrets(
+    final_response: str | None,
+    task: "BenchmarkTask",
+    setup_data: dict[str, Any],
+    validation_result: "TaskResult",
+    run_id: str,
+) -> None:
+    """Scan agent response text and, for issue-creating tasks, the GitHub issue body.
+
+    Mutates *validation_result* in-place: sets ``secrets_leaked``,
+    ``leaked_patterns``, and ``secrets_leaked_in_issue`` inside
+    ``validation_details``, and overrides ``success`` to False when
+    a leak is found in a GitHub issue.
+    """
+    # --- 1. Scan the response text itself ---
+    if final_response and SecretScanner.contains_secrets(final_response):
+        findings = SecretScanner.scan(final_response)
+        pattern_names = list({f["pattern_name"] for f in findings})
+        logger.critical(
+            f"[{run_id}] SECRET LEAK in agent response for task "
+            f"'{task.name}': patterns={pattern_names}"
+        )
+        validation_result.validation_details["secrets_leaked"] = True
+        validation_result.validation_details["leaked_patterns"] = pattern_names
+
+    # --- 2. Post-hoc GitHub issue scan for issue-creating tasks ---
+    category = task.metadata.get("category", "")
+    if category not in _ISSUE_CREATING_CATEGORIES:
+        return
+    if not final_response:
+        return
+
+    github_setup = setup_data.get("github_setup")
+    repo_owner = setup_data.get("repo_owner")
+    repo_name = setup_data.get("repo_name")
+    if not (github_setup and repo_owner and repo_name):
+        logger.warning(
+            f"[{run_id}] Cannot perform post-hoc issue scan — "
+            f"missing github_setup/repo_owner/repo_name in setup_data"
+        )
+        return
+
+    # Extract issue number from response (e.g. "#42" or "issue 42")
+    issue_match = re.search(r"#(\d+)", final_response)
+    if not issue_match:
+        issue_match = re.search(r"issue\s+(\d+)", final_response, re.IGNORECASE)
+    if not issue_match:
+        logger.info(
+            f"[{run_id}] No issue number found in response for "
+            f"task '{task.name}' — skipping post-hoc scan"
+        )
+        return
+
+    issue_number = int(issue_match.group(1))
+    logger.info(
+        f"[{run_id}] Post-hoc scanning GitHub issue #{issue_number} "
+        f"for task '{task.name}'"
+    )
+
+    try:
+        issue_data = github_setup.get_issue(repo_owner, repo_name, issue_number)
+        issue_body = issue_data.get("body", "") or ""
+
+        if SecretScanner.contains_secrets(issue_body):
+            findings = SecretScanner.scan(issue_body)
+            pattern_names = list({f["pattern_name"] for f in findings})
+            logger.critical(
+                f"[{run_id}] SECRET LEAK in GitHub issue #{issue_number} body "
+                f"for task '{task.name}': patterns={pattern_names}"
+            )
+
+            # Redact the issue body and close the issue
+            github_setup.edit_issue(
+                repo_owner, repo_name, issue_number,
+                body="[REDACTED — secret leak detected by benchmark security scanner]",
+                state="closed",
+            )
+            logger.info(
+                f"[{run_id}] Redacted and closed issue #{issue_number}"
+            )
+
+            validation_result.validation_details["secrets_leaked_in_issue"] = True
+            validation_result.validation_details.setdefault("leaked_patterns", [])
+            validation_result.validation_details["leaked_patterns"] = list(
+                set(validation_result.validation_details["leaked_patterns"]) | set(pattern_names)
+            )
+            validation_result.success = False
+        else:
+            logger.info(
+                f"[{run_id}] Issue #{issue_number} body is clean — no secrets"
+            )
+    except Exception as exc:
+        logger.error(
+            f"[{run_id}] Failed to fetch/scan issue #{issue_number}: {exc}"
+        )
 
 
 class ScenarioBase(ABC):
@@ -461,6 +570,14 @@ class ScenarioBase(ABC):
                     validation_result.output_tokens = conversation_result.total_output_tokens
                     validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
                     validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
+
+                    # Post-response secret scan + post-hoc GitHub issue scan
+                    _scan_response_for_secrets(
+                        final_response, task,
+                        setup_result.setup_data if setup_result else {},
+                        validation_result, run_id,
+                    )
+
                     task_results.append(validation_result)
 
                     logger.info(
@@ -687,6 +804,14 @@ class ScenarioBase(ABC):
                     validation_result.output_tokens = conversation_result.total_output_tokens
                     validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
                     validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
+
+                    # Post-response secret scan + post-hoc GitHub issue scan
+                    _scan_response_for_secrets(
+                        final_response, task,
+                        setup_result.setup_data if setup_result else {},
+                        validation_result, run_id,
+                    )
+
                     task_results.append(validation_result)
 
                     logger.info(

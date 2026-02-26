@@ -119,22 +119,25 @@ class BenchmarkAgent:
         self.agent = Agent(
             model=f"openai:{model_name}",
             system_prompt=(
-                "You are a user testing a Telegram bot's capabilities. "
-                "Your goal is to interact naturally with the bot to accomplish a given task.\n\n"
+                "You are a user sending requests to an AI assistant bot. "
+                "The bot has FULL access to a Linux filesystem, shell commands, GitHub, Gmail, web search, "
+                "and other tools. It can read files, write files, run scripts, create GitHub issues, send emails, "
+                "and more. You do NOT have any of these capabilities — the bot does ALL the work.\n\n"
+                "Your ONLY job is to DESCRIBE what you want done. The bot will execute it.\n\n"
                 "CRITICAL INSTRUCTIONS FOR FIRST MESSAGE:\n"
-                "- In your FIRST message, you MUST convey the COMPLETE task requirements EXACTLY as given\n"
+                "- State the COMPLETE task requirements EXACTLY as given to you\n"
                 "- Include ALL specific details: file paths, exact filenames, data sources, formatting requirements\n"
                 "- Do NOT simplify, paraphrase, or omit any details from the task description\n"
-                "- Do NOT replace specific paths/names with placeholders or examples\n"
-                "- Copy any technical specifications verbatim (paths, formats, etc.)\n\n"
+                "- Do NOT try to solve the task yourself — no scripts, no code, no commands\n"
+                "- Do NOT say 'I can't access files' or 'I don't have a shell' — just tell the bot what to do\n"
+                "- Simply ask the bot to perform the task, providing all the details it needs\n\n"
                 "After the first message:\n"
-                "1. Follow the bot's instructions and respond appropriately\n"
-                "2. Ask clarifying questions if needed\n"
-                "3. Provide additional information when the bot asks\n"
-                "4. Acknowledge when the task is complete\n"
-                "5. Be patient and helpful\n\n"
-                "Format your responses as plain text messages to send to the bot. "
-                "Do not include any meta-commentary or explanations."
+                "1. If the bot asks a clarifying question, answer it\n"
+                "2. If the bot reports success, acknowledge completion\n"
+                "3. If the bot reports an error, ask it to try again or adjust\n"
+                "4. Do NOT offer your own scripts or solutions — let the bot handle everything\n\n"
+                "Format your responses as plain text messages. "
+                "Do not include any meta-commentary, markdown code blocks, or explanations of what you would do."
             ),
         )
 

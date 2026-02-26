@@ -1,9 +1,12 @@
 """GitHub API setup helper for GitHub benchmark scenario."""
 
 import base64
+import json
 import logging
 import requests
 from typing import Any
+
+from benchmarks.security import SecretScanner
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,24 @@ class GitHubSetup:
         self.seeded_issue_numbers: list[int] = []  # Track seed issues for cleanup
         self.seeded_label_name: str | None = None  # Track seed label for cleanup
 
+    @staticmethod
+    def _sanitize(value: str) -> str:
+        """Strip shell-dangerous characters from a string.
+
+        Removes backticks, $, !, and backslashes so that seed data
+        cannot be interpreted by shells or injection vectors.
+        """
+        for ch in ("`", "$", "!", "\\"):
+            value = value.replace(ch, "")
+        return value
+
+    @property
+    def _redacted_token(self) -> str:
+        """Return a redacted form of the token for safe logging."""
+        if len(self.token) >= 4:
+            return f"***{self.token[-4:]}"
+        return "***"
+
     def _make_request(
         self, method: str, endpoint: str, json_data: dict[str, Any] | None = None, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -50,9 +71,28 @@ class GitHubSetup:
         Raises:
             requests.HTTPError: If API request fails
         """
+        # Guard: scan outbound data for leaked secrets before sending
+        if method.upper() in ("POST", "PUT", "PATCH") and json_data:
+            payload_text = json.dumps(json_data)
+            findings = SecretScanner.scan(payload_text)
+            if findings:
+                redacted_details = [
+                    f"{f['pattern_name']} at position {f['position']}"
+                    for f in findings
+                ]
+                raise ValueError(
+                    f"Secret leak blocked in GitHub API request to {endpoint}: "
+                    f"{redacted_details}"
+                )
+
         url = f"{self.BASE_URL}/{endpoint}"
-        response = requests.request(method, url, json=json_data, params=params, headers=self.headers, timeout=30)
-        response.raise_for_status()
+        try:
+            response = requests.request(method, url, json=json_data, params=params, headers=self.headers, timeout=30)
+            response.raise_for_status()
+        except requests.HTTPError as exc:
+            # Strip Authorization header from error messages to avoid leaking tokens
+            safe_msg = str(exc).replace(self.token, self._redacted_token)
+            raise requests.HTTPError(safe_msg, response=exc.response) from None
         return response.json() if response.content else {}
 
     def create_test_issue(self, repo_owner: str, repo_name: str, title: str, body: str) -> dict[str, Any]:
@@ -147,6 +187,50 @@ class GitHubSetup:
         logger.info(f"Closed issue #{issue_number}")
         return response
 
+    def get_issue(self, repo_owner: str, repo_name: str, issue_number: int) -> dict[str, Any]:
+        """Fetch a single issue by number.
+
+        Args:
+            repo_owner: Repository owner username
+            repo_name: Repository name
+            issue_number: Issue number
+
+        Returns:
+            Issue data dict
+
+        Raises:
+            requests.HTTPError: If fetch fails
+        """
+        endpoint = f"repos/{repo_owner}/{repo_name}/issues/{issue_number}"
+        return self._make_request("GET", endpoint)
+
+    def edit_issue(
+        self, repo_owner: str, repo_name: str, issue_number: int,
+        body: str | None = None, state: str | None = None,
+    ) -> dict[str, Any]:
+        """Edit an existing issue (body and/or state).
+
+        Args:
+            repo_owner: Repository owner username
+            repo_name: Repository name
+            issue_number: Issue number
+            body: New issue body (optional)
+            state: New issue state, e.g. 'closed' (optional)
+
+        Returns:
+            Updated issue data dict
+
+        Raises:
+            requests.HTTPError: If update fails
+        """
+        endpoint = f"repos/{repo_owner}/{repo_name}/issues/{issue_number}"
+        patch_data: dict[str, Any] = {}
+        if body is not None:
+            patch_data["body"] = body
+        if state is not None:
+            patch_data["state"] = state
+        return self._make_request("PATCH", endpoint, json_data=patch_data)
+
     def cleanup_test_issues(self, repo_owner: str, repo_name: str) -> int:
         """Close all test issues created during setup.
 
@@ -189,8 +273,10 @@ class GitHubSetup:
 
         seed_info: dict[str, Any] = {}
 
-        # Get default branch
+        # Get default branch and enforce private repo
         repo_info = self.get_repo_info(repo_owner, repo_name)
+        if repo_info.get("private") is not True:
+            raise ValueError("Refusing to seed data into public repository")
         default_branch = repo_info.get("default_branch", "main")
 
         # --- Step 1: Create 5 files on main (5 commits) ---
@@ -216,7 +302,7 @@ class GitHubSetup:
                 "content": (
                     "// API client\n\n"
                     "async function getUser(id) {\n"
-                    "  return fetchData(`/api/users/${id}`);\n"
+                    "  return fetchData('/api/users/' + id);\n"
                     "}\n\n"
                     "async function listPosts() {\n"
                     "  return fetchData('/api/posts');\n"
@@ -261,11 +347,12 @@ class GitHubSetup:
         ]
 
         for file_info in files:
-            content_b64 = base64.b64encode(file_info["content"].encode()).decode()
+            sanitized_content = self._sanitize(file_info["content"])
+            content_b64 = base64.b64encode(sanitized_content.encode()).decode()
             endpoint = f"repos/{repo_owner}/{repo_name}/contents/{file_info['path']}"
             try:
                 self._make_request("PUT", endpoint, json_data={
-                    "message": file_info["message"],
+                    "message": self._sanitize(file_info["message"]),
                     "content": content_b64,
                 })
                 self.seeded_files.append(file_info["path"])
@@ -291,11 +378,12 @@ class GitHubSetup:
             logger.info(f"Created branch {branch_name}")
 
             # Add a file on the feature branch
+            pr_file_raw = "// Feature: improved error handling\nasync function handleError(err) {\n  console.error(err);\n}\n"
             pr_file_content = base64.b64encode(
-                "// Feature: improved error handling\nasync function handleError(err) {\n  console.error(err);\n}\n".encode()
+                self._sanitize(pr_file_raw).encode()
             ).decode()
             self._make_request("PUT", f"repos/{repo_owner}/{repo_name}/contents/src/error_handler.js", json_data={
-                "message": "Add error handler feature",
+                "message": self._sanitize("Add error handler feature"),
                 "content": pr_file_content,
                 "branch": branch_name,
             })
@@ -304,8 +392,8 @@ class GitHubSetup:
 
             # --- Step 3: Open a PR ---
             pr_data = self._make_request("POST", f"repos/{repo_owner}/{repo_name}/pulls", json_data={
-                "title": "[BENCHMARK] Add error handler feature",
-                "body": "This PR adds improved error handling for async functions.",
+                "title": self._sanitize("[BENCHMARK] Add error handler feature"),
+                "body": self._sanitize("This PR adds improved error handling for async functions."),
                 "head": branch_name,
                 "base": default_branch,
             })
@@ -322,8 +410,8 @@ class GitHubSetup:
             release_data = self._make_request("POST", f"repos/{repo_owner}/{repo_name}/releases", json_data={
                 "tag_name": "v1.0.0-benchmark",
                 "target_commitish": default_branch,
-                "name": "v1.0.0 - Initial Release",
-                "body": "First benchmark release. Includes async utility functions and API client.",
+                "name": self._sanitize("v1.0.0 - Initial Release"),
+                "body": self._sanitize("First benchmark release. Includes async utility functions and API client."),
                 "draft": False,
                 "prerelease": False,
             })
@@ -340,7 +428,7 @@ class GitHubSetup:
             self._make_request("POST", f"repos/{repo_owner}/{repo_name}/labels", json_data={
                 "name": "benchmark-seed",
                 "color": "0075ca",
-                "description": "Seeded by benchmark setup for label listing task",
+                "description": self._sanitize("Seeded by benchmark setup for label listing task"),
             })
             self.seeded_label_name = "benchmark-seed"
             seed_info["seeded_label"] = self.seeded_label_name
@@ -370,11 +458,16 @@ class GitHubSetup:
             },
         ]
         for issue_data in seed_issues:
+            sanitized_issue = {
+                "title": self._sanitize(issue_data["title"]),
+                "body": self._sanitize(issue_data["body"]),
+                "labels": issue_data["labels"],
+            }
             try:
                 resp = self._make_request(
                     "POST",
                     f"repos/{repo_owner}/{repo_name}/issues",
-                    json_data=issue_data,
+                    json_data=sanitized_issue,
                 )
                 issue_number = resp.get("number")
                 if issue_number:

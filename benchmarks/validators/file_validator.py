@@ -14,12 +14,19 @@ class FileValidator:
 
     @staticmethod
     def validate_file_organization(response: str, setup_data: dict[str, Any]) -> TaskResult:
-        """Validate Task 1: File Organization - Create directory structure.
+        """Validate Task 1: File Organization - Split sales by region.
 
-        Expected: users/{name}/profile.txt for each user with email and role
+        Expected: by_region/{region}/sales.csv for each region with correct filtered rows.
         """
         workspace_dir = Path(setup_data.get("workspace_dir", "/tmp/openclaw_benchmark"))
-        expected_users = setup_data.get("expected_users", [])
+
+        # Ground truth from sales_data.csv (seeded in file_setup.py)
+        expected_regions = {
+            "North": [("Laptop", "5"), ("Mouse", "20")],
+            "South": [("Mouse", "15"), ("Laptop", "7")],
+            "East":  [("Keyboard", "8"), ("Monitor", "4"), ("Laptop", "3")],
+            "West":  [("Monitor", "3"), ("Keyboard", "10")],
+        }
 
         success = False
         accuracy_score = 0.0
@@ -27,43 +34,44 @@ class FileValidator:
         error_message = None
 
         try:
-            users_dir = workspace_dir / "users"
+            by_region_dir = workspace_dir / "by_region"
 
-            if not users_dir.exists():
-                error_message = "users/ directory not found"
+            if not by_region_dir.exists():
+                error_message = "by_region/ directory not found"
             else:
-                # Check each user has their directory and profile.txt
                 all_valid = True
                 missing_items = []
 
-                for user in expected_users:
-                    user_name = user["name"]
-                    user_dir = users_dir / user_name
-                    profile_file = user_dir / "profile.txt"
+                for region, expected_rows in expected_regions.items():
+                    region_csv = by_region_dir / region / "sales.csv"
 
-                    if not user_dir.exists():
+                    if not region_csv.exists():
                         all_valid = False
-                        missing_items.append(f"Directory users/{user_name}/")
+                        missing_items.append(f"Missing by_region/{region}/sales.csv")
                         continue
 
-                    if not profile_file.exists():
+                    content = region_csv.read_text()
+                    # Check that each expected product+quantity pair appears
+                    for product, qty in expected_rows:
+                        if product not in content:
+                            all_valid = False
+                            missing_items.append(
+                                f"by_region/{region}/sales.csv missing product '{product}'"
+                            )
+
+                    # Check row count (header + data rows)
+                    lines = [l for l in content.strip().splitlines() if l.strip()]
+                    data_lines = len(lines) - 1  # subtract header
+                    if data_lines != len(expected_rows):
                         all_valid = False
-                        missing_items.append(f"File users/{user_name}/profile.txt")
-                        continue
+                        missing_items.append(
+                            f"by_region/{region}/sales.csv has {data_lines} data rows, "
+                            f"expected {len(expected_rows)}"
+                        )
 
-                    # Verify profile.txt content
-                    content = profile_file.read_text()
-                    has_email = user["email"] in content
-                    has_role = user["role"] in content
-
-                    if not (has_email and has_role):
-                        all_valid = False
-                        missing_items.append(f"Invalid content in users/{user_name}/profile.txt")
-
-                validation_details["checked_users"] = len(expected_users)
+                validation_details["expected_regions"] = list(expected_regions.keys())
                 validation_details["missing_items"] = missing_items
 
-                # Binary scoring: pass only if ALL users have valid directories and files
                 if all_valid:
                     success = True
                     accuracy_score = 100.0
@@ -76,7 +84,7 @@ class FileValidator:
 
         return TaskResult(
             task_name="File Organization",
-            prompt="Create users/{name}/profile.txt directories and files",
+            prompt="Create by_region/{region}/sales.csv with filtered rows",
             success=success,
             latency=0.0,
             accuracy_score=accuracy_score,
