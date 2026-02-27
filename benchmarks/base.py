@@ -437,7 +437,7 @@ class ScenarioBase(ABC):
         self,
         client: Any,
         bot_identifier: int | str,
-        ai_agent: BenchmarkAgent,
+        ai_agent: BenchmarkAgent | None = None,
         skip_setup: bool = False,
         timeout_multiplier: float = 1.0,
     ) -> ScenarioResult:
@@ -446,7 +446,7 @@ class ScenarioBase(ABC):
         Args:
             client: Client (LocalClient or TelegramClient)
             bot_identifier: For LocalClient: chat_id (int), For TelegramClient: bot_username (str)
-            ai_agent: BenchmarkAgent for multi-turn conversations (required)
+            ai_agent: BenchmarkAgent for multi-turn conversations (None for single-turn mode)
             skip_setup: Skip setup phase
             timeout_multiplier: Multiply all task timeouts by this factor
 
@@ -515,34 +515,27 @@ class ScenarioBase(ABC):
                 logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
 
             try:
-                # Multi-turn conversation mode with AI agent
-                logger.info(f"[{run_id}] Starting multi-turn conversation for task: {task.name}")
-                logger.info(f"[{run_id}] Task description: {task.expected_output_description}")
+                if ai_agent is None:
+                    # ── Single-turn mode ──────────────────────────────────
+                    logger.info(f"[{run_id}] Single-turn: sending prompt directly for task: {task.name}")
+                    effective_timeout = task.timeout * timeout_multiplier
+                    response = await session.send_message_async(
+                        task.prompt, wait_for_response=True, timeout=effective_timeout,
+                    )
+                    task_latency = time.time() - task_start
+                    final_response = response.text if response else None
 
-                # Run the conversation (pass full prompt, not just expected output description)
-                effective_timeout = task.timeout * timeout_multiplier
-                conversation_result: ConversationResult = await ai_agent.run_conversation_async(
-                    task_name=task.name,
-                    task_description=task.prompt,  # Use full prompt with all details
-                    session=session,
-                    task_timeout=effective_timeout,
-                )
+                    # Extract token usage if available (LocalMessage has it)
+                    input_tokens = output_tokens = reasoning_tokens = cache_read_tokens = 0
+                    if response and hasattr(response, "token_usage") and response.token_usage:
+                        u = response.token_usage
+                        input_tokens = u.input
+                        output_tokens = u.output
+                        reasoning_tokens = getattr(u, "reasoning", 0)
+                        cache_read_tokens = getattr(u, "cache_read", 0)
 
-                task_latency = conversation_result.total_latency
-
-                # Get all bot responses for validation (concatenated)
-                # Use all responses for local validation so validators can check entire conversation
-                all_bot_responses = "\n\n".join(
-                    turn.bot_response for turn in conversation_result.conversation_turns if turn.bot_response
-                )
-                final_response = all_bot_responses if all_bot_responses else None
-
-                # Validate the conversation outcome
-                if conversation_result.success:
-                    # File-based tasks: download bot-produced files from remote and validate them.
-                    # Response-based tasks: validate the bot's reply text directly even in remote mode.
+                    # Validate
                     if hasattr(self, 'remote_manager') and self.remote_manager and task.validates_files:
-                        # Remote file validation: download files and validate
                         logger.info(f"[{run_id}] Running remote file validation for task: {task.name}")
                         validation_result = self.remote_manager.remote_validate(
                             task_name=task.name,
@@ -550,28 +543,21 @@ class ScenarioBase(ABC):
                             setup_data=setup_result.setup_data if setup_result else {},
                         )
                     else:
-                        # Response-based validation: use all bot responses concatenated
                         validation_result = task.validation_fn(
                             final_response, setup_result.setup_data if setup_result else {}
                         )
-                    validation_result.latency = task_latency
-                    validation_result.conversation_turns = conversation_result.total_turns
-                    validation_result.conversation_history = [
-                        {
-                            "turn": turn.turn_number,
-                            "user": turn.user_message,
-                            "bot": turn.bot_response,
-                            "timestamp": turn.timestamp,
-                        }
-                        for turn in conversation_result.conversation_turns
-                    ]
-                    validation_result.completion_reason = conversation_result.completion_reason
-                    validation_result.input_tokens = conversation_result.total_input_tokens
-                    validation_result.output_tokens = conversation_result.total_output_tokens
-                    validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
-                    validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
 
-                    # Post-response secret scan + post-hoc GitHub issue scan
+                    validation_result.latency = task_latency
+                    validation_result.conversation_turns = 1
+                    validation_result.conversation_history = [
+                        {"turn": 1, "user": task.prompt, "bot": final_response, "timestamp": time.time()}
+                    ]
+                    validation_result.completion_reason = "single_turn"
+                    validation_result.input_tokens = input_tokens
+                    validation_result.output_tokens = output_tokens
+                    validation_result.reasoning_tokens = reasoning_tokens
+                    validation_result.cache_read_tokens = cache_read_tokens
+
                     _scan_response_for_secrets(
                         final_response, task,
                         setup_result.setup_data if setup_result else {},
@@ -579,48 +565,121 @@ class ScenarioBase(ABC):
                     )
 
                     task_results.append(validation_result)
-
                     logger.info(
-                        f"[{run_id}] Multi-turn task completed: turns={conversation_result.total_turns}, "
+                        f"[{run_id}] Single-turn task completed: "
                         f"success={validation_result.success}, "
                         f"accuracy={validation_result.accuracy_score:.1f}, "
                         f"latency={task_latency:.2f}s, "
-                        f"reason={conversation_result.completion_reason}, "
-                        f"tokens: in={conversation_result.total_input_tokens} "
-                        f"out={conversation_result.total_output_tokens} "
-                        f"reasoning={conversation_result.total_reasoning_tokens} "
-                        f"cache_read={conversation_result.total_cache_read_tokens}"
+                        f"tokens: in={input_tokens} out={output_tokens} "
+                        f"reasoning={reasoning_tokens} cache_read={cache_read_tokens}"
                     )
                 else:
-                    # Conversation failed
-                    task_results.append(
-                        TaskResult(
-                            task_name=task.name,
-                            prompt=task.prompt,
-                            success=False,
-                            latency=task_latency,
-                            accuracy_score=0.0,
-                            error_message=conversation_result.error_message or f"Conversation failed: {conversation_result.completion_reason}",
-                            conversation_turns=conversation_result.total_turns,
-                            conversation_history=[
-                                {
-                                    "turn": turn.turn_number,
-                                    "user": turn.user_message,
-                                    "bot": turn.bot_response,
-                                    "timestamp": turn.timestamp,
-                                }
-                                for turn in conversation_result.conversation_turns
-                            ],
-                            completion_reason=conversation_result.completion_reason,
-                            input_tokens=conversation_result.total_input_tokens,
-                            output_tokens=conversation_result.total_output_tokens,
-                            reasoning_tokens=conversation_result.total_reasoning_tokens,
-                            cache_read_tokens=conversation_result.total_cache_read_tokens,
+                    # ── Multi-turn conversation mode with AI agent ─────────
+                    logger.info(f"[{run_id}] Starting multi-turn conversation for task: {task.name}")
+                    logger.info(f"[{run_id}] Task description: {task.expected_output_description}")
+
+                    # Run the conversation (pass full prompt, not just expected output description)
+                    effective_timeout = task.timeout * timeout_multiplier
+                    conversation_result: ConversationResult = await ai_agent.run_conversation_async(
+                        task_name=task.name,
+                        task_description=task.prompt,  # Use full prompt with all details
+                        session=session,
+                        task_timeout=effective_timeout,
+                    )
+
+                    task_latency = conversation_result.total_latency
+
+                    # Get all bot responses for validation (concatenated)
+                    # Use all responses for local validation so validators can check entire conversation
+                    all_bot_responses = "\n\n".join(
+                        turn.bot_response for turn in conversation_result.conversation_turns if turn.bot_response
+                    )
+                    final_response = all_bot_responses if all_bot_responses else None
+
+                    # Validate the conversation outcome
+                    if conversation_result.success:
+                        # File-based tasks: download bot-produced files from remote and validate them.
+                        # Response-based tasks: validate the bot's reply text directly even in remote mode.
+                        if hasattr(self, 'remote_manager') and self.remote_manager and task.validates_files:
+                            # Remote file validation: download files and validate
+                            logger.info(f"[{run_id}] Running remote file validation for task: {task.name}")
+                            validation_result = self.remote_manager.remote_validate(
+                                task_name=task.name,
+                                validation_fn=task.validation_fn,
+                                setup_data=setup_result.setup_data if setup_result else {},
+                            )
+                        else:
+                            # Response-based validation: use all bot responses concatenated
+                            validation_result = task.validation_fn(
+                                final_response, setup_result.setup_data if setup_result else {}
+                            )
+                        validation_result.latency = task_latency
+                        validation_result.conversation_turns = conversation_result.total_turns
+                        validation_result.conversation_history = [
+                            {
+                                "turn": turn.turn_number,
+                                "user": turn.user_message,
+                                "bot": turn.bot_response,
+                                "timestamp": turn.timestamp,
+                            }
+                            for turn in conversation_result.conversation_turns
+                        ]
+                        validation_result.completion_reason = conversation_result.completion_reason
+                        validation_result.input_tokens = conversation_result.total_input_tokens
+                        validation_result.output_tokens = conversation_result.total_output_tokens
+                        validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
+                        validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
+
+                        # Post-response secret scan + post-hoc GitHub issue scan
+                        _scan_response_for_secrets(
+                            final_response, task,
+                            setup_result.setup_data if setup_result else {},
+                            validation_result, run_id,
                         )
-                    )
-                    logger.error(
-                        f"[{run_id}] Multi-turn task failed: {conversation_result.error_message or conversation_result.completion_reason}"
-                    )
+
+                        task_results.append(validation_result)
+
+                        logger.info(
+                            f"[{run_id}] Multi-turn task completed: turns={conversation_result.total_turns}, "
+                            f"success={validation_result.success}, "
+                            f"accuracy={validation_result.accuracy_score:.1f}, "
+                            f"latency={task_latency:.2f}s, "
+                            f"reason={conversation_result.completion_reason}, "
+                            f"tokens: in={conversation_result.total_input_tokens} "
+                            f"out={conversation_result.total_output_tokens} "
+                            f"reasoning={conversation_result.total_reasoning_tokens} "
+                            f"cache_read={conversation_result.total_cache_read_tokens}"
+                        )
+                    else:
+                        # Conversation failed
+                        task_results.append(
+                            TaskResult(
+                                task_name=task.name,
+                                prompt=task.prompt,
+                                success=False,
+                                latency=task_latency,
+                                accuracy_score=0.0,
+                                error_message=conversation_result.error_message or f"Conversation failed: {conversation_result.completion_reason}",
+                                conversation_turns=conversation_result.total_turns,
+                                conversation_history=[
+                                    {
+                                        "turn": turn.turn_number,
+                                        "user": turn.user_message,
+                                        "bot": turn.bot_response,
+                                        "timestamp": turn.timestamp,
+                                    }
+                                    for turn in conversation_result.conversation_turns
+                                ],
+                                completion_reason=conversation_result.completion_reason,
+                                input_tokens=conversation_result.total_input_tokens,
+                                output_tokens=conversation_result.total_output_tokens,
+                                reasoning_tokens=conversation_result.total_reasoning_tokens,
+                                cache_read_tokens=conversation_result.total_cache_read_tokens,
+                            )
+                        )
+                        logger.error(
+                            f"[{run_id}] Multi-turn task failed: {conversation_result.error_message or conversation_result.completion_reason}"
+                        )
 
             except Exception as e:
                 task_latency = time.time() - task_start
@@ -673,7 +732,7 @@ class ScenarioBase(ABC):
         self,
         client: Any,
         bot_identifier: int | str,
-        ai_agent: BenchmarkAgent,
+        ai_agent: BenchmarkAgent | None = None,
         skip_setup: bool = False,
         timeout_multiplier: float = 1.0,
     ) -> ScenarioResult:
@@ -682,7 +741,7 @@ class ScenarioBase(ABC):
         Args:
             client: Client (LocalClient or TelegramClient)
             bot_identifier: For LocalClient: chat_id (int), For TelegramClient: bot_username (str)
-            ai_agent: BenchmarkAgent for multi-turn conversations (required)
+            ai_agent: BenchmarkAgent for multi-turn conversations (None for single-turn mode)
             skip_setup: Skip setup phase
             timeout_multiplier: Multiply all task timeouts by this factor
 
@@ -750,33 +809,27 @@ class ScenarioBase(ABC):
                 logger.error(f"[{run_id}] Could not send /new (session context may be dirty): {e}")
 
             try:
-                # Multi-turn conversation mode with AI agent (sync wrapper)
-                logger.info(f"[{run_id}] Starting multi-turn conversation for task: {task.name}")
+                if ai_agent is None:
+                    # ── Single-turn mode ──────────────────────────────────
+                    logger.info(f"[{run_id}] Single-turn: sending prompt directly for task: {task.name}")
+                    effective_timeout = task.timeout * timeout_multiplier
+                    response = session.send_message_sync(
+                        task.prompt, wait_for_response=True, timeout=effective_timeout,
+                    )
+                    task_latency = time.time() - task_start
+                    final_response = response.text if response else None
 
-                # Run the conversation using sync wrapper (pass full prompt, not just expected output description)
-                effective_timeout = task.timeout * timeout_multiplier
-                conversation_result: ConversationResult = ai_agent.run_conversation_sync(
-                    task_name=task.name,
-                    task_description=task.prompt,
-                    session=session,
-                    task_timeout=effective_timeout,
-                )
+                    # Extract token usage if available (LocalMessage has it)
+                    input_tokens = output_tokens = reasoning_tokens = cache_read_tokens = 0
+                    if response and hasattr(response, "token_usage") and response.token_usage:
+                        u = response.token_usage
+                        input_tokens = u.input
+                        output_tokens = u.output
+                        reasoning_tokens = getattr(u, "reasoning", 0)
+                        cache_read_tokens = getattr(u, "cache_read", 0)
 
-                task_latency = conversation_result.total_latency
-
-                # Get all bot responses for validation (concatenated)
-                # Use all responses for local validation so validators can check entire conversation
-                all_bot_responses = "\n\n".join(
-                    turn.bot_response for turn in conversation_result.conversation_turns if turn.bot_response
-                )
-                final_response = all_bot_responses if all_bot_responses else None
-
-                # Validate the conversation outcome
-                if conversation_result.success:
-                    # File-based tasks: download bot-produced files from remote and validate them.
-                    # Response-based tasks: validate the bot's reply text directly even in remote mode.
+                    # Validate
                     if hasattr(self, 'remote_manager') and self.remote_manager and task.validates_files:
-                        # Remote file validation: download files and validate
                         logger.info(f"[{run_id}] Running remote file validation for task: {task.name}")
                         validation_result = self.remote_manager.remote_validate(
                             task_name=task.name,
@@ -784,28 +837,21 @@ class ScenarioBase(ABC):
                             setup_data=setup_result.setup_data if setup_result else {},
                         )
                     else:
-                        # Response-based validation: use all bot responses concatenated
                         validation_result = task.validation_fn(
                             final_response, setup_result.setup_data if setup_result else {}
                         )
-                    validation_result.latency = task_latency
-                    validation_result.conversation_turns = conversation_result.total_turns
-                    validation_result.conversation_history = [
-                        {
-                            "turn": turn.turn_number,
-                            "user": turn.user_message,
-                            "bot": turn.bot_response,
-                            "timestamp": turn.timestamp,
-                        }
-                        for turn in conversation_result.conversation_turns
-                    ]
-                    validation_result.completion_reason = conversation_result.completion_reason
-                    validation_result.input_tokens = conversation_result.total_input_tokens
-                    validation_result.output_tokens = conversation_result.total_output_tokens
-                    validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
-                    validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
 
-                    # Post-response secret scan + post-hoc GitHub issue scan
+                    validation_result.latency = task_latency
+                    validation_result.conversation_turns = 1
+                    validation_result.conversation_history = [
+                        {"turn": 1, "user": task.prompt, "bot": final_response, "timestamp": time.time()}
+                    ]
+                    validation_result.completion_reason = "single_turn"
+                    validation_result.input_tokens = input_tokens
+                    validation_result.output_tokens = output_tokens
+                    validation_result.reasoning_tokens = reasoning_tokens
+                    validation_result.cache_read_tokens = cache_read_tokens
+
                     _scan_response_for_secrets(
                         final_response, task,
                         setup_result.setup_data if setup_result else {},
@@ -813,56 +859,128 @@ class ScenarioBase(ABC):
                     )
 
                     task_results.append(validation_result)
-
                     logger.info(
-                        f"[{run_id}] Task completed: {conversation_result.total_turns} turns, "
+                        f"[{run_id}] Single-turn task completed: "
                         f"success={validation_result.success}, "
-                        f"accuracy={validation_result.accuracy_score:.1f}%, "
-                        f"completion={conversation_result.completion_reason}, "
+                        f"accuracy={validation_result.accuracy_score:.1f}, "
                         f"latency={task_latency:.2f}s, "
-                        f"tokens: in={conversation_result.total_input_tokens} "
-                        f"out={conversation_result.total_output_tokens} "
-                        f"reasoning={conversation_result.total_reasoning_tokens} "
-                        f"cache_read={conversation_result.total_cache_read_tokens}"
+                        f"tokens: in={input_tokens} out={output_tokens} "
+                        f"reasoning={reasoning_tokens} cache_read={cache_read_tokens}"
                     )
-                    if validation_result.validation_details:
-                        logger.info(f"[{run_id}] Validation details: {validation_result.validation_details}")
                 else:
-                    # Conversation failed or no final response
-                    error_msg = (
-                        conversation_result.error_message
-                        if conversation_result.error_message
-                        else f"Conversation ended: {conversation_result.completion_reason}"
+                    # ── Multi-turn conversation mode with AI agent (sync wrapper) ──
+                    logger.info(f"[{run_id}] Starting multi-turn conversation for task: {task.name}")
+
+                    # Run the conversation using sync wrapper (pass full prompt, not just expected output description)
+                    effective_timeout = task.timeout * timeout_multiplier
+                    conversation_result: ConversationResult = ai_agent.run_conversation_sync(
+                        task_name=task.name,
+                        task_description=task.prompt,
+                        session=session,
+                        task_timeout=effective_timeout,
                     )
-                    task_results.append(
-                        TaskResult(
-                            task_name=task.name,
-                            prompt=task.prompt,
-                            success=False,
-                            latency=task_latency,
-                            accuracy_score=0.0,
-                            error_message=error_msg,
-                            conversation_turns=conversation_result.total_turns,
-                            conversation_history=[
-                                {
-                                    "turn": turn.turn_number,
-                                    "user": turn.user_message,
-                                    "bot": turn.bot_response,
-                                    "timestamp": turn.timestamp,
-                                }
-                                for turn in conversation_result.conversation_turns
-                            ],
-                            completion_reason=conversation_result.completion_reason,
-                            input_tokens=conversation_result.total_input_tokens,
-                            output_tokens=conversation_result.total_output_tokens,
-                            reasoning_tokens=conversation_result.total_reasoning_tokens,
-                            cache_read_tokens=conversation_result.total_cache_read_tokens,
+
+                    task_latency = conversation_result.total_latency
+
+                    # Get all bot responses for validation (concatenated)
+                    # Use all responses for local validation so validators can check entire conversation
+                    all_bot_responses = "\n\n".join(
+                        turn.bot_response for turn in conversation_result.conversation_turns if turn.bot_response
+                    )
+                    final_response = all_bot_responses if all_bot_responses else None
+
+                    # Validate the conversation outcome
+                    if conversation_result.success:
+                        # File-based tasks: download bot-produced files from remote and validate them.
+                        # Response-based tasks: validate the bot's reply text directly even in remote mode.
+                        if hasattr(self, 'remote_manager') and self.remote_manager and task.validates_files:
+                            # Remote file validation: download files and validate
+                            logger.info(f"[{run_id}] Running remote file validation for task: {task.name}")
+                            validation_result = self.remote_manager.remote_validate(
+                                task_name=task.name,
+                                validation_fn=task.validation_fn,
+                                setup_data=setup_result.setup_data if setup_result else {},
+                            )
+                        else:
+                            # Response-based validation: use all bot responses concatenated
+                            validation_result = task.validation_fn(
+                                final_response, setup_result.setup_data if setup_result else {}
+                            )
+                        validation_result.latency = task_latency
+                        validation_result.conversation_turns = conversation_result.total_turns
+                        validation_result.conversation_history = [
+                            {
+                                "turn": turn.turn_number,
+                                "user": turn.user_message,
+                                "bot": turn.bot_response,
+                                "timestamp": turn.timestamp,
+                            }
+                            for turn in conversation_result.conversation_turns
+                        ]
+                        validation_result.completion_reason = conversation_result.completion_reason
+                        validation_result.input_tokens = conversation_result.total_input_tokens
+                        validation_result.output_tokens = conversation_result.total_output_tokens
+                        validation_result.reasoning_tokens = conversation_result.total_reasoning_tokens
+                        validation_result.cache_read_tokens = conversation_result.total_cache_read_tokens
+
+                        # Post-response secret scan + post-hoc GitHub issue scan
+                        _scan_response_for_secrets(
+                            final_response, task,
+                            setup_result.setup_data if setup_result else {},
+                            validation_result, run_id,
                         )
-                    )
-                    logger.error(
-                        f"[{run_id}] Task failed: {conversation_result.total_turns} turns, "
-                        f"completion={conversation_result.completion_reason}, error={error_msg}"
-                    )
+
+                        task_results.append(validation_result)
+
+                        logger.info(
+                            f"[{run_id}] Task completed: {conversation_result.total_turns} turns, "
+                            f"success={validation_result.success}, "
+                            f"accuracy={validation_result.accuracy_score:.1f}%, "
+                            f"completion={conversation_result.completion_reason}, "
+                            f"latency={task_latency:.2f}s, "
+                            f"tokens: in={conversation_result.total_input_tokens} "
+                            f"out={conversation_result.total_output_tokens} "
+                            f"reasoning={conversation_result.total_reasoning_tokens} "
+                            f"cache_read={conversation_result.total_cache_read_tokens}"
+                        )
+                        if validation_result.validation_details:
+                            logger.info(f"[{run_id}] Validation details: {validation_result.validation_details}")
+                    else:
+                        # Conversation failed or no final response
+                        error_msg = (
+                            conversation_result.error_message
+                            if conversation_result.error_message
+                            else f"Conversation ended: {conversation_result.completion_reason}"
+                        )
+                        task_results.append(
+                            TaskResult(
+                                task_name=task.name,
+                                prompt=task.prompt,
+                                success=False,
+                                latency=task_latency,
+                                accuracy_score=0.0,
+                                error_message=error_msg,
+                                conversation_turns=conversation_result.total_turns,
+                                conversation_history=[
+                                    {
+                                        "turn": turn.turn_number,
+                                        "user": turn.user_message,
+                                        "bot": turn.bot_response,
+                                        "timestamp": turn.timestamp,
+                                    }
+                                    for turn in conversation_result.conversation_turns
+                                ],
+                                completion_reason=conversation_result.completion_reason,
+                                input_tokens=conversation_result.total_input_tokens,
+                                output_tokens=conversation_result.total_output_tokens,
+                                reasoning_tokens=conversation_result.total_reasoning_tokens,
+                                cache_read_tokens=conversation_result.total_cache_read_tokens,
+                            )
+                        )
+                        logger.error(
+                            f"[{run_id}] Task failed: {conversation_result.total_turns} turns, "
+                            f"completion={conversation_result.completion_reason}, error={error_msg}"
+                        )
 
             except Exception as e:
                 task_latency = time.time() - task_start

@@ -1,16 +1,28 @@
 # OpenClaw Benchmark Client
 
-A multi-turn conversation benchmarking framework for testing OpenClaw bot performance. An AI agent simulates a real user, conducts natural multi-turn conversations with the bot to accomplish tasks, and measures success rate, accuracy, and latency.
+A benchmarking framework for testing OpenClaw bot performance. Supports two execution modes:
+
+- **Multi-turn mode** (default): An AI agent (powered by OpenAI) simulates a real user, conducting natural conversations with the bot to accomplish tasks.
+- **Single-turn mode** (`--single-turn`): Each task prompt is sent directly to the bot — no AI agent, no conversation, just prompt → response → validate.
 
 ## How It Works
 
-Each benchmark task works like this:
+### Multi-turn mode (default)
 
 1. An **AI agent** (powered by OpenAI) receives a task description
 2. The agent sends messages to the **OpenClaw bot** (via Telegram or local CLI)
-3. The agent and bot exchange messages until the task is complete (up to 10 turns)
+3. The agent and bot exchange messages until the task is complete (up to 10 turns, configurable via `--max-turns`)
 4. A **validator** checks whether the task was actually completed correctly
 5. Results are collected: turns taken, latency, success/fail, accuracy score
+
+### Single-turn mode (`--single-turn`)
+
+1. The task **prompt is sent directly** to the bot (no AI agent involved)
+2. The bot's response is captured
+3. A **validator** checks the response
+4. Results are collected: latency, success/fail, accuracy score, token usage
+
+Single-turn mode is faster, cheaper (no OpenAI API cost), and removes the AI agent as a confounding variable.
 
 ---
 
@@ -46,7 +58,7 @@ The benchmark calls `openclaw agent` directly as a subprocess. No Telegram invol
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) package manager
-- An OpenAI API key (required — the AI agent that simulates users runs on OpenAI)
+- An OpenAI API key (required for multi-turn mode; **not needed** for `--single-turn`)
 - For Telegram mode: credentials from [my.telegram.org](https://my.telegram.org) and SSH access to the bot server
 - For local mode: `openclaw` CLI installed and on `$PATH`
 
@@ -71,10 +83,11 @@ cp .env.example .env
 
 All configuration lives in `.env`. Here is what you need depending on what you want to run.
 
-### Always Required
+### Always Required (multi-turn mode)
 
 ```bash
-# AI agent that simulates the user in conversations (required for all modes)
+# AI agent that simulates the user in conversations
+# NOT required when using --single-turn mode
 OPENAI_API_KEY=sk-proj-...
 AI_AGENT_MODEL=gpt-5-mini
 ```
@@ -111,7 +124,7 @@ AGENT_ID=main    # The openclaw agent name (default: main)
 
 ```bash
 ASYNC_MODE=true               # true = async (faster, default); false = sync (easier to debug)
-MAX_CONVERSATION_TURNS=10     # Max turns per task before giving up
+MAX_CONVERSATION_TURNS=10     # Max turns per task before giving up (overridable via --max-turns)
 CONVERSATION_TIMEOUT=300.0    # Seconds per task before timeout
 TIMEOUT_MULTIPLIER=1.0        # Scale all timeouts (use >1 on slow machines)
 ```
@@ -155,10 +168,16 @@ DEBUG_MODE=false    # true = very verbose output
 ### Local Mode (fastest, no auth needed)
 
 ```bash
-# Run a single scenario
+# Run a single scenario (multi-turn, requires OPENAI_API_KEY)
 just bench file mode=local
 just bench weather mode=local
 just bench web mode=local
+
+# Single-turn mode (no OPENAI_API_KEY needed)
+uv run python cli.py --local benchmark-suite --scenario file --single-turn
+
+# Single-turn, easy tasks only
+uv run python cli.py --local benchmark-suite --single-turn --difficulty easy
 
 # Run all scenarios
 just bench all mode=local
@@ -209,12 +228,37 @@ just bench file model="anthropic/claude-opus-4-5"
 # Save results to JSON
 just bench file output=results.json
 just bench all mode=local output=results.json
+
+# Single-turn mode (no AI agent, no OPENAI_API_KEY needed)
+uv run python cli.py --local benchmark-suite --single-turn --scenario file
+uv run python cli.py --local benchmark-suite --single-turn --scenario all -o results_single.json
+
+# Filter by task difficulty (easy/medium/hard)
+uv run python cli.py --local benchmark-suite --difficulty easy
+uv run python cli.py --local benchmark-suite --single-turn --difficulty easy
+
+# Override max conversation turns (multi-turn mode only)
+uv run python cli.py --local benchmark-suite --max-turns 5
+uv run python cli.py --local benchmark-suite --max-turns 3 --difficulty easy
 ```
 
 The `bench` recipe signature:
 ```
 just bench <scenario> [mode=telegram|local] [model=provider/model] [output=file.json]
 ```
+
+#### CLI flags reference
+
+| Flag | Description |
+|------|-------------|
+| `--single-turn` | Send prompts directly to bot, skip AI agent (no OPENAI_API_KEY needed) |
+| `--difficulty <level>` | Only run tasks of this difficulty: `easy`, `medium`, `hard`, or `all` (default: `all`) |
+| `--max-turns <n>` | Override max conversation turns per task (default: from `MAX_CONVERSATION_TURNS` env) |
+| `--scenario <name>` | Run a specific scenario or `all` |
+| `--bot-model <model>` | Switch bot model before running |
+| `-o <path>` | Export results to JSON |
+| `--no-setup` | Skip setup phase |
+| `--skip-missing` / `--no-skip-missing` | Skip or fail on scenarios with missing skills |
 
 Logs are automatically saved to `logs/bench_<scenario>_<timestamp>.log`.
 
@@ -387,7 +431,7 @@ The JSON contains:
 
 ```
 results.json
-├── config                          # Run settings (mode, model, async)
+├── config                          # Run settings (mode, model, async, single_turn/multi_turn)
 └── scenarios[]
     ├── scenario_name               # "File Manipulation", "Gmail Email", etc.
     ├── total_duration              # Wall-clock time for the scenario (seconds)
@@ -398,7 +442,7 @@ results.json
         ├── success                 # true/false — did the task pass validation?
         ├── accuracy_score          # 100.0 (pass) or 0.0 (fail) — binary scoring
         ├── latency                 # Seconds from first message to last response
-        ├── completion_reason       # "goal_achieved" | "max_turns" | "timeout" | "error"
+        ├── completion_reason       # "goal_achieved" | "max_turns" | "timeout" | "error" | "single_turn"
         ├── conversation_turns      # Number of AI↔bot exchanges
         ├── conversation_history[]  # Full transcript: {turn, user, bot, timestamp}
         ├── validation_details      # Scenario-specific: what was checked and what failed
@@ -450,20 +494,16 @@ grep -E "ERROR|timeout|FAIL" logs/bench_all_*.log
 Run the same benchmark across models and compare:
 
 ```bash
-# Run on different models
+# Multi-turn comparison
 uv run python cli.py --local benchmark-suite --scenario all --bot-model "openai/gpt-5.2" -o results_gpt52.json
 uv run python cli.py --local benchmark-suite --scenario all --bot-model "openai/gpt-5-mini" -o results_mini.json
 
-# Compare results
-python3 -c "
-import json
-for f, label in [('results_gpt52.json','GPT-5.2'), ('results_mini.json','GPT-5-Mini')]:
-    data = json.load(open(f))
-    tasks = [t for s in data['scenarios'] for t in s['task_results']]
-    passed = sum(1 for t in tasks if t['success'])
-    tok = sum(t.get('input_tokens',0) for t in tasks)
-    print(f'{label:20s}: {passed}/{len(tasks)} passed, {tok:,} input tokens')
-"
+# Single-turn comparison (faster, no AI agent cost)
+uv run python cli.py --local benchmark-suite --single-turn --scenario all --bot-model "openai/gpt-5.2" -o results_gpt52_single.json
+uv run python cli.py --local benchmark-suite --single-turn --scenario all --bot-model "openai/gpt-5-mini" -o results_mini_single.json
+
+# Analyze results with the leaderboard script (shows mode column)
+python3 scripts/analyze_logs.py results_gpt52.json results_mini.json results_gpt52_single.json results_mini_single.json
 ```
 
 ---
@@ -486,8 +526,9 @@ For Telegram mode, SSH credentials (`BOT_SSH_*`) must be configured. Without the
 **Reading results:**
 - `success: true` + `accuracy: 100%` — task completed and validated
 - `success: false` + `accuracy: 0%` — task failed or validation failed
+- `completion_reason: single_turn` — single-turn mode (one prompt, one response)
 - `completion_reason: timeout` — bot did not respond within the timeout
-- `completion_reason: max_turns` — task not finished within 10 turns
+- `completion_reason: max_turns` — task not finished within max turns
 
 ---
 
@@ -548,7 +589,7 @@ opencalw-sandbox/
 Install OpenClaw and make sure it is on your `$PATH`. Run `openclaw --version` to verify.
 
 **`OPENAI_API_KEY is required`**
-Set `OPENAI_API_KEY` in your `.env`. The AI agent that drives conversations requires it.
+Set `OPENAI_API_KEY` in your `.env`. The AI agent that drives multi-turn conversations requires it. Alternatively, use `--single-turn` mode which doesn't need an OpenAI API key.
 
 **`benchmark-sweep requires SSH credentials`** (Telegram mode sweep)
 Set `BOT_SSH_HOST`, `BOT_SSH_USER`, and either `BOT_SSH_KEY_PATH` or `BOT_SSH_PASSWORD` in `.env`. The sweep needs SSH to discover and switch models on the remote bot.

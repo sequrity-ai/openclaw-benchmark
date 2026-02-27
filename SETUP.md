@@ -51,6 +51,7 @@ LOCAL_MODE=true
 AGENT_ID=main
 
 # OpenAI (for the AI agent that simulates a user in multi-turn conversations)
+# NOT required when using --single-turn mode
 OPENAI_API_KEY=sk-proj-...
 
 # AI agent model (drives the benchmark's user-simulator, NOT the model being tested)
@@ -357,6 +358,46 @@ just sweep mode=local
 just sweep mode=local output=sweep_results.json
 ```
 
+### Single-turn mode
+
+Single-turn mode sends each task's prompt directly to the bot — no AI agent, no multi-turn conversation. This removes the OpenAI dependency and the confounding variable of AI agent quality.
+
+```bash
+# Single-turn, all scenarios (no OPENAI_API_KEY needed)
+just bench all mode=local single_turn=true
+
+# Single-turn, easy tasks only
+uv run python cli.py --local benchmark-suite --single-turn --difficulty easy
+
+# Single-turn with model switching and output
+uv run python cli.py --local benchmark-suite --single-turn --bot-model anthropic/claude-sonnet-4-5 -o results_single.json
+```
+
+### Difficulty filtering
+
+Each scenario has 9 tasks (3 easy, 3 medium, 3 hard). You can run only tasks of a specific difficulty:
+
+```bash
+# Only easy tasks (works with both single-turn and multi-turn)
+uv run python cli.py --local benchmark-suite --difficulty easy
+uv run python cli.py --local benchmark-suite --single-turn --difficulty easy
+
+# Only hard tasks
+uv run python cli.py --local benchmark-suite --difficulty hard
+```
+
+### Max turns override
+
+Override the maximum number of conversation turns per task (default: 10, from `MAX_CONVERSATION_TURNS` in `.env`):
+
+```bash
+# Limit to 5 turns per task
+uv run python cli.py --local benchmark-suite --max-turns 5
+
+# Combine with difficulty filter
+uv run python cli.py --local benchmark-suite --max-turns 3 --difficulty easy
+```
+
 ### Direct CLI usage
 
 ```bash
@@ -568,14 +609,21 @@ opencalw-sandbox/
 
 ## Quick Start (Minimal)
 
-For a quick test with just the File scenario (no API keys needed beyond OpenAI):
+For a quick test with just the File scenario using single-turn mode (no API keys needed):
 
 ```bash
 cd ~/opencalw-sandbox
 cp .env.example .env
-# Edit .env: set LOCAL_MODE=true, OPENAI_API_KEY=sk-...
+# Edit .env: set LOCAL_MODE=true (no OPENAI_API_KEY needed for single-turn)
 
 uv sync
+uv run python cli.py --local benchmark-suite --scenario file --single-turn
+```
+
+For a quick test with multi-turn mode (requires OpenAI API key):
+
+```bash
+# Edit .env: set LOCAL_MODE=true, OPENAI_API_KEY=sk-...
 uv run python cli.py --local benchmark-suite --scenario file
 ```
 
@@ -587,4 +635,7 @@ For a full run across all scenarios:
 # Create and configure GitHub test repo
 
 uv run python cli.py --local benchmark-suite --scenario all --bot-model anthropic/claude-sonnet-4-5
+
+# Or single-turn for faster, cheaper runs (no OPENAI_API_KEY needed)
+uv run python cli.py --local benchmark-suite --scenario all --single-turn --bot-model anthropic/claude-sonnet-4-5 -o results.json
 ```

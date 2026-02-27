@@ -200,8 +200,11 @@ uv run python cli.py --async benchmark-suite --scenario all
 ### Options
 
 - `--async`: Enable async mode (REQUIRED for multi-turn conversations)
+- `--single-turn`: Send task prompts directly to bot (no AI agent, no OPENAI_API_KEY needed)
+- `--difficulty <level>`: Only run tasks of a given difficulty: `easy`, `medium`, `hard`, or `all` (default: `all`)
+- `--max-turns <n>`: Override max conversation turns per task (multi-turn mode only)
 - `--skip-missing`: Skip scenarios with missing skills (default: false)
-- `--output <path>`: Export results to markdown file
+- `--output <path>`: Export results to JSON file
 - `--mode <local|telegram>`: Choose mode (just command only)
 
 ---
@@ -234,7 +237,9 @@ benchmarks/
 
 1. **Pre-check**: Verify required skills are installed and APIs are accessible
 2. **Setup**: Create test data (files, emails, etc.)
-3. **Execution**: AI agent has multi-turn conversation with bot to complete tasks
+3. **Execution**: Either:
+   - **Multi-turn** (default): AI agent has multi-turn conversation with bot to complete tasks
+   - **Single-turn** (`--single-turn`): Task prompt sent directly to bot, response captured immediately
 4. **Validation**: Validate bot's actions (binary scoring: 0% or 100% per task)
 5. **Cleanup**: Remove test data
 
@@ -295,8 +300,8 @@ clawhub install gog
 See `.env.example` for all configuration options.
 
 Key settings:
-- `AI_AGENT_MODEL`: OpenAI model for user simulation (default: `gpt-4o-mini`)
-- `MAX_CONVERSATION_TURNS`: Maximum turns per task (default: 10)
+- `AI_AGENT_MODEL`: OpenAI model for user simulation (default: `gpt-4o-mini`; unused in `--single-turn` mode)
+- `MAX_CONVERSATION_TURNS`: Maximum turns per task (default: 10; overridable via `--max-turns`)
 - `CONVERSATION_TIMEOUT`: Maximum time per conversation (default: 300s)
 
 ---

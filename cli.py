@@ -366,13 +366,14 @@ def _print_scenario_result(result, index, total):
     print(f"{'-'*60}\n")
 
 
-def _export_results(config, all_results, output_path):
+def _export_results(config, all_results, output_path, single_turn: bool = False):
     """Export results to JSON."""
     export_data = {
         "config": {
             "async_mode": config.async_mode,
             "local_mode": config.local_mode,
             "bot_model": config.bot_model if config.bot_model else None,
+            "mode": "single_turn" if single_turn else "multi_turn",
         },
         "scenarios": [result.to_dict() for result in all_results],
         "summary": {
@@ -450,22 +451,50 @@ async def run_benchmark_suite_async(config: TelegramConfig, args) -> None:
         print("\nNo scenarios to run (all skipped due to missing skills).")
         return
 
+    # Filter tasks by difficulty if requested
+    if args.difficulty and args.difficulty != "all":
+        for scenario in scenarios:
+            original_count = len(scenario.tasks)
+            scenario.tasks = [
+                t for t in scenario.tasks
+                if t.metadata.get("difficulty") == args.difficulty
+            ]
+            if len(scenario.tasks) < original_count:
+                logger.info(
+                    f"Filtered {scenario.name}: {original_count} -> {len(scenario.tasks)} tasks "
+                    f"(difficulty={args.difficulty})"
+                )
+        # Remove scenarios that have no tasks left after filtering
+        scenarios = [s for s in scenarios if s.tasks]
+        if not scenarios:
+            print(f"\nNo tasks match difficulty='{args.difficulty}'. Nothing to run.")
+            return
+
     _print_suite_header(config, scenarios, skipped, args)
 
-    # Create AI agent (required)
-    if not config.openai_api_key:
-        print("\nERROR: OPENAI_API_KEY is required for multi-turn conversations.")
-        print("Please set OPENAI_API_KEY in your .env file.")
-        raise ValueError("Missing required OPENAI_API_KEY configuration")
+    # Apply max-turns override
+    max_turns = args.max_turns if args.max_turns is not None else config.max_conversation_turns
 
-    logger.info("Creating AI agent for multi-turn conversations")
-    ai_agent = BenchmarkAgent(
-        model_name=config.ai_agent_model,
-        openai_api_key=config.openai_api_key,
-        max_turns=config.max_conversation_turns,
-        conversation_timeout=config.conversation_timeout,
-    )
-    print(f"Multi-turn mode: max {config.max_conversation_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
+    # Create AI agent (skip in single-turn mode)
+    single_turn = getattr(args, "single_turn", False)
+    ai_agent = None
+
+    if single_turn:
+        print("Single-turn mode: sending prompts directly (no AI agent)")
+    else:
+        if not config.openai_api_key:
+            print("\nERROR: OPENAI_API_KEY is required for multi-turn conversations.")
+            print("Please set OPENAI_API_KEY in your .env file.")
+            raise ValueError("Missing required OPENAI_API_KEY configuration")
+
+        logger.info("Creating AI agent for multi-turn conversations")
+        ai_agent = BenchmarkAgent(
+            model_name=config.ai_agent_model,
+            openai_api_key=config.openai_api_key,
+            max_turns=max_turns,
+            conversation_timeout=config.conversation_timeout,
+        )
+        print(f"Multi-turn mode: max {max_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
 
     # Inject custom bot prompt (SOUL.md) if configured
     soul_backup = _inject_custom_soul(config)
@@ -495,7 +524,7 @@ async def run_benchmark_suite_async(config: TelegramConfig, args) -> None:
                 _print_scenario_result(result, i, len(scenarios))
 
             if args.output:
-                _export_results(config, all_results, args.output)
+                _export_results(config, all_results, args.output, single_turn=single_turn)
     finally:
         _restore_soul(config, soul_backup)
 
@@ -555,22 +584,49 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
         print("\nNo scenarios to run (all skipped due to missing skills).")
         return
 
+    # Filter tasks by difficulty if requested
+    if args.difficulty and args.difficulty != "all":
+        for scenario in scenarios:
+            original_count = len(scenario.tasks)
+            scenario.tasks = [
+                t for t in scenario.tasks
+                if t.metadata.get("difficulty") == args.difficulty
+            ]
+            if len(scenario.tasks) < original_count:
+                logger.info(
+                    f"Filtered {scenario.name}: {original_count} -> {len(scenario.tasks)} tasks "
+                    f"(difficulty={args.difficulty})"
+                )
+        scenarios = [s for s in scenarios if s.tasks]
+        if not scenarios:
+            print(f"\nNo tasks match difficulty='{args.difficulty}'. Nothing to run.")
+            return
+
     _print_suite_header(config, scenarios, skipped, args)
 
-    # Create AI agent (required)
-    if not config.openai_api_key:
-        print("\nERROR: OPENAI_API_KEY is required for multi-turn conversations.")
-        print("Please set OPENAI_API_KEY in your .env file.")
-        raise ValueError("Missing required OPENAI_API_KEY configuration")
+    # Apply max-turns override
+    max_turns = args.max_turns if args.max_turns is not None else config.max_conversation_turns
 
-    logger.info("Creating AI agent for multi-turn conversations (sync wrapper)")
-    ai_agent = BenchmarkAgent(
-        model_name=config.ai_agent_model,
-        openai_api_key=config.openai_api_key,
-        max_turns=config.max_conversation_turns,
-        conversation_timeout=config.conversation_timeout,
-    )
-    print(f"Multi-turn mode (sync): max {config.max_conversation_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
+    # Create AI agent (skip in single-turn mode)
+    single_turn = getattr(args, "single_turn", False)
+    ai_agent = None
+
+    if single_turn:
+        print("Single-turn mode (sync): sending prompts directly (no AI agent)")
+    else:
+        if not config.openai_api_key:
+            print("\nERROR: OPENAI_API_KEY is required for multi-turn conversations.")
+            print("Please set OPENAI_API_KEY in your .env file.")
+            raise ValueError("Missing required OPENAI_API_KEY configuration")
+
+        logger.info("Creating AI agent for multi-turn conversations (sync wrapper)")
+        ai_agent = BenchmarkAgent(
+            model_name=config.ai_agent_model,
+            openai_api_key=config.openai_api_key,
+            max_turns=max_turns,
+            conversation_timeout=config.conversation_timeout,
+        )
+        print(f"Multi-turn mode (sync): max {max_turns} turns, {config.conversation_timeout}s timeout, model {config.ai_agent_model}")
 
     # Inject custom bot prompt (SOUL.md) if configured
     soul_backup = _inject_custom_soul(config)
@@ -600,7 +656,7 @@ def run_benchmark_suite_sync(config: TelegramConfig, args) -> None:
                 _print_scenario_result(result, i, len(scenarios))
 
             if args.output:
-                _export_results(config, all_results, args.output)
+                _export_results(config, all_results, args.output, single_turn=single_turn)
     finally:
         _restore_soul(config, soul_backup)
 
@@ -981,6 +1037,26 @@ def main() -> int:
         type=str,
         default=None,
         help="Switch bot to this model before running (e.g. anthropic/claude-opus-4-5). Requires SSH credentials.",
+    )
+    suite_parser.add_argument(
+        "--single-turn",
+        action="store_true",
+        default=False,
+        help="Single-turn mode: send task prompt directly to bot (no AI agent, no OPENAI_API_KEY needed)",
+    )
+    suite_parser.add_argument(
+        "--difficulty",
+        type=str,
+        choices=["easy", "medium", "hard", "all"],
+        default="all",
+        help="Only run tasks with this difficulty level (default: all)",
+    )
+    suite_parser.add_argument(
+        "--max-turns",
+        dest="max_turns",
+        type=int,
+        default=None,
+        help="Override max conversation turns per task (default: from config)",
     )
 
     # benchmark-sweep subcommand: discover all models via SSH and run all scenarios for each
