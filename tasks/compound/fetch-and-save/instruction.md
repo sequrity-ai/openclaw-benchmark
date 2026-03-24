@@ -1,0 +1,1 @@
+Fetch the current price of Bitcoin in USD from the CoinGecko API (https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd) and save the price as a plain number to /workspace/btc_price.txt

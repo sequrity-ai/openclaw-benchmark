@@ -12,10 +12,11 @@ Usage:
 
 import argparse
 import asyncio
-import json
+import contextlib
 import logging
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -35,6 +36,56 @@ from task_runner import (
 TASKS_DIR = Path(__file__).parent / "tasks"
 
 logger = logging.getLogger(__name__)
+
+GATEWAY_PORT = 18789
+
+
+def _gateway_running() -> bool:
+    """Check if the openclaw gateway is reachable."""
+    try:
+        result = subprocess.run(
+            ["openclaw", "health"],
+            capture_output=True, text=True, timeout=15,
+        )
+        return result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
+@contextlib.contextmanager
+def ensure_gateway():
+    """Start the openclaw gateway if not already running, stop it on exit."""
+    if _gateway_running():
+        logger.info("Gateway already running, skipping start.")
+        yield
+        return
+
+    logger.info("Starting openclaw gateway...")
+    proc = subprocess.Popen(
+        ["openclaw", "gateway", "run", "--force"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+    # Wait up to 30s for the gateway to come up
+    for _ in range(6):
+        time.sleep(5)
+        if _gateway_running():
+            logger.info("Gateway is up.")
+            break
+    else:
+        proc.terminate()
+        raise RuntimeError("openclaw gateway failed to start within 30s")
+
+    try:
+        yield
+    finally:
+        logger.info("Stopping openclaw gateway...")
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -154,8 +205,9 @@ async def run_bench(args, config: TelegramConfig) -> None:
         timeout_multiplier=config.timeout_multiplier,
     )
 
-    # Run suite
-    suite = await runner.run_suite(tasks, scenario_name=scenario_label)
+    # Run suite (gateway must be up for exec tool calls)
+    with ensure_gateway():
+        suite = await runner.run_suite(tasks, scenario_name=scenario_label)
 
     # Print summary
     print("\n" + "=" * 60)
@@ -184,8 +236,12 @@ def main():
     parser = argparse.ArgumentParser(description="OpenClaw Benchmark Runner")
     parser.add_argument(
         "--scenario", "-s",
-        default="file",
+        default="all",
         help="Scenario to run (file, weather, web, etc. or 'all')",
+    )
+    parser.add_argument(
+        "--all", action="store_true",
+        help="Run all scenarios (equivalent to --scenario all)",
     )
     parser.add_argument(
         "--backend", "-b",
@@ -221,6 +277,8 @@ def main():
     )
 
     args = parser.parse_args()
+    if args.all:
+        args.scenario = "all"
     setup_logging(args.verbose)
     config = load_config()
 

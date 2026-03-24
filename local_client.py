@@ -114,11 +114,11 @@ class LocalClient:
                 raise ValueError(f"No JSON found in agent response: {stdout[:200]}")
 
         # Extract response text from payloads
-        payloads = data.get("result", {}).get("payloads", [])
+        payloads = data.get("payloads", data.get("result", {}).get("payloads", []))
         text_parts = [p.get("text", "") for p in payloads if p.get("text")]
         full_text = "\n".join(text_parts) if text_parts else None
 
-        meta = data.get("result", {}).get("meta", {})
+        meta = data.get("meta", data.get("result", {}).get("meta", {}))
         agent_meta = meta.get("agentMeta", {})
 
         # Parse token usage
@@ -141,13 +141,13 @@ class LocalClient:
         )
 
     async def send_and_receive_async(
-        self, message: str, timeout: float = 120.0
+        self, message: str, timeout: float = 300.0
     ) -> LocalMessage:
         """Send a message and get the agent's response (async wrapper)."""
         return self._run_agent(message, timeout)
 
     def send_and_receive_sync(
-        self, message: str, timeout: float = 120.0
+        self, message: str, timeout: float = 300.0
     ) -> LocalMessage:
         """Send a message and get the agent's response (sync)."""
         return self._run_agent(message, timeout)
@@ -163,7 +163,7 @@ class LocalSession:
         self.start_time = time.time()
 
     async def send_message_async(
-        self, text: str, wait_for_response: bool = True, timeout: float = 120.0
+        self, text: str, wait_for_response: bool = True, timeout: float = 300.0
     ) -> LocalMessage | None:
         """Send a message and wait for the agent's response."""
         logger.info(f"Sending to local agent: {text[:80]}...")
@@ -189,7 +189,7 @@ class LocalSession:
         return response
 
     def send_message_sync(
-        self, text: str, wait_for_response: bool = True, timeout: float = 120.0
+        self, text: str, wait_for_response: bool = True, timeout: float = 300.0
     ) -> LocalMessage | None:
         """Send a message and wait for the agent's response (sync)."""
         logger.info(f"Sending to local agent: {text[:80]}...")

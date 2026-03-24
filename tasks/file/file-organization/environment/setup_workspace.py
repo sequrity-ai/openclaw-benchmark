@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Create benchmark seed files in the workspace directory."""
 import json
-import os
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path

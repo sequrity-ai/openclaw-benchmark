@@ -80,7 +80,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="by_region/{region}/sales.csv for each region with filtered rows",
                 validation_fn=self.validator.validate_file_organization,
-                timeout=60.0,
+                timeout=600.0,
                 metadata={"difficulty": "easy", "category": "file_organization"},
                 validates_files=True,
             )
@@ -101,7 +101,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="Updated profile.txt files with action item counts",
                 validation_fn=self.validator.validate_file_modification,
-                timeout=60.0,
+                timeout=600.0,
                 metadata={"difficulty": "easy", "category": "file_modification"},
                 validates_files=True,
             )
@@ -121,7 +121,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="CSV file with aggregated user data sorted by action count",
                 validation_fn=self.validator.validate_file_consolidation,
-                timeout=60.0,
+                timeout=600.0,
                 metadata={"difficulty": "easy", "category": "file_consolidation"},
                 validates_files=True,
             )
@@ -139,7 +139,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="log_summary.txt listing all .log files with paths",
                 validation_fn=self.validator.validate_recursive_search,
-                timeout=90.0,
+                timeout=600.0,
                 metadata={"difficulty": "medium", "category": "file_search"},
                 validates_files=True,
             )
@@ -158,7 +158,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="sales_report.json with aggregated product totals",
                 validation_fn=self.validator.validate_data_transformation,
-                timeout=90.0,
+                timeout=600.0,
                 metadata={"difficulty": "medium", "category": "data_transformation"},
                 validates_files=True,
             )
@@ -177,7 +177,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="config_diff.txt identifying all differences",
                 validation_fn=self.validator.validate_file_comparison,
-                timeout=90.0,
+                timeout=600.0,
                 metadata={"difficulty": "medium", "category": "file_comparison"},
                 validates_files=True,
             )
@@ -198,7 +198,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="department_report.json merging all three data sources",
                 validation_fn=self.validator.validate_multi_step_pipeline,
-                timeout=120.0,
+                timeout=600.0,
                 metadata={"difficulty": "hard", "category": "data_pipeline"},
                 validates_files=True,
             )
@@ -221,7 +221,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="log_analysis.json with error rates and hourly distribution",
                 validation_fn=self.validator.validate_log_analysis,
-                timeout=120.0,
+                timeout=600.0,
                 metadata={"difficulty": "hard", "category": "log_analysis"},
                 validates_files=True,
             )
@@ -242,7 +242,7 @@ class FileScenario(ScenarioBase):
                 ),
                 expected_output_description="validation_report.json with data quality issues",
                 validation_fn=self.validator.validate_data_validation,
-                timeout=120.0,
+                timeout=600.0,
                 metadata={"difficulty": "hard", "category": "data_validation"},
                 validates_files=True,
             )

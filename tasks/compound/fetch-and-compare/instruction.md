@@ -1,0 +1,1 @@
+Fetch the current Bitcoin price from CoinGecko (https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd). Compare it to the threshold in /workspace/thresholds.txt. Write 'ABOVE' or 'BELOW' to /workspace/result.txt depending on whether the current price exceeds the threshold.

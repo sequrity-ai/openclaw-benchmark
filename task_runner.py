@@ -16,7 +16,6 @@ import logging
 import os
 import shutil
 import subprocess
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -312,7 +311,11 @@ class DaytonaBackend:
                     "model": {"primary": "sequrity/gpt-5.2", "fallbacks": []},
                     "workspace": "/workspace",
                     "timeoutSeconds": 300,
+                    "sandbox": {"mode": "off"},
                 }
+            },
+            "tools": {
+                "exec": {"host": "sandbox"},
             },
             "gateway": {
                 "port": 18789,
@@ -357,9 +360,19 @@ class DaytonaBackend:
         """Install openclaw and write config inside the sandbox."""
         logger.info("Installing openclaw in sandbox...")
 
-        # Install openclaw globally
-        r = self._sandbox.process.exec("npm install -g openclaw", timeout=120)
-        logger.info(f"npm install: {r.result.strip()[-200:]}")
+        # Install openclaw — upload local tarball if available, else npm registry
+        tarball = os.path.join(os.path.dirname(__file__), "..", "openclaw", "openclaw-2026.3.14.tgz")
+        if not os.path.exists(tarball):
+            tarball = os.path.expanduser("~/openclaw/openclaw-2026.3.14.tgz")
+        if os.path.exists(tarball):
+            logger.info(f"Uploading local tarball: {tarball}")
+            with open(tarball, "rb") as f:
+                self._sandbox.fs.upload_file(f.read(), "/tmp/openclaw.tgz")
+            r = self._sandbox.process.exec("npm install -g /tmp/openclaw.tgz", timeout=180)
+        else:
+            logger.info("No local tarball found, installing from npm")
+            r = self._sandbox.process.exec("npm install -g openclaw", timeout=120)
+        logger.info(f"npm install: {r.result.strip()[-200:] if r.result else '(no output)'}")
 
         # Install python3 (node:22-bookworm has apt)
         self._sandbox.process.exec(
@@ -380,19 +393,26 @@ class DaytonaBackend:
         r = self._sandbox.process.exec("openclaw --version")
         logger.info(f"openclaw version: {r.result.strip()}")
 
-    def send_to_agent(self, message: str, timeout: float, agent_id: str = "main") -> dict:
+        # Log the config for debugging
+        logger.info("Sandbox config: workspace=/workspace, sandbox=off, exec.host=node")
+
+    def send_to_agent(self, message: str, timeout: float, agent_id: str = "main", session_id: str | None = None) -> dict:
         """Run openclaw agent inside the sandbox and return parsed response."""
         self._ensure_sandbox()
 
-        cmd = (
-            f"openclaw agent --agent {agent_id} "
+        sid = session_id or f"bench-{int(time.time())}"
+        agent_cmd = (
+            f"openclaw agent --local "
+            f"--session-id {json.dumps(sid)} "
             f"--message {json.dumps(message)} "
-            f"--json --timeout {int(timeout)}"
+            f"--json --timeout {int(timeout) + 180}"
         )
+        cmd = f"bash -c {json.dumps(agent_cmd + ' 2>&1')}"
         logger.debug(f"Running in sandbox: openclaw agent --message '{message[:80]}...'")
 
-        r = self._sandbox.process.exec(cmd, timeout=int(timeout) + 60)
+        r = self._sandbox.process.exec(cmd, timeout=int(timeout) + 240)
         stdout = r.result
+        logger.info(f"[agent raw] exit={getattr(r, 'exit_code', '?')} len={len(stdout) if stdout else 0} first500={repr(stdout[:500] if stdout else None)}")
 
         if not stdout or not stdout.strip():
             raise RuntimeError("Empty response from agent in sandbox")
@@ -419,13 +439,12 @@ class DaytonaBackend:
         meta = inner.get("meta", {})
         agent_meta = meta.get("agentMeta", {})
         usage = agent_meta.get("usage", {})
-
         return {
             "text": text,
             "input_tokens": usage.get("input", 0),
             "output_tokens": usage.get("output", 0),
             "reasoning_tokens": usage.get("reasoning", 0),
-            "cache_read_tokens": usage.get("cacheRead", 0),
+            "cache_read_tokens": usage.get("totalCacheRead", 0) or usage.get("cacheRead", 0),
             "duration_ms": meta.get("durationMs", 0.0),
             "model": agent_meta.get("model"),
         }
@@ -497,7 +516,7 @@ class DaytonaBackend:
         try:
             return float(r.result.strip())
         except (ValueError, AttributeError):
-            logger.error(f"Could not read reward.txt from sandbox")
+            logger.error("Could not read reward.txt from sandbox")
             return 0.0
 
 
@@ -703,7 +722,7 @@ class TaskRunner:
         self.agent_id = agent_id
         self.timeout_multiplier = timeout_multiplier
 
-    def _send_to_agent(self, message: str, timeout: float) -> dict:
+    def _send_to_agent(self, message: str, timeout: float, session_id: str | None = None) -> dict:
         """Send a message to the openclaw agent and return parsed response.
 
         Returns dict with keys: text, input_tokens, output_tokens,
@@ -711,7 +730,8 @@ class TaskRunner:
         """
         cmd = [
             "openclaw", "agent",
-            "--agent", self.agent_id,
+            "--local",
+            "--session-id", session_id or f"bench-{int(time.time())}",
             "--message", message,
             "--json",
             "--timeout", str(int(timeout)),
@@ -723,8 +743,10 @@ class TaskRunner:
             timeout=timeout + 30,
         )
 
+        if result.stderr:
+            logger.debug(f"[agent stderr] {result.stderr.strip()[:500]}")
         if result.returncode != 0:
-            raise RuntimeError(f"Agent command failed: {result.stderr.strip()}")
+            raise RuntimeError(f"Agent command failed (rc={result.returncode}): {result.stderr.strip()[:500]}")
 
         # openclaw may print non-JSON lines (plugin logs) before the JSON output
         # Find the first line that starts with '{' and parse from there
@@ -752,13 +774,12 @@ class TaskRunner:
         meta = inner.get("meta", {})
         agent_meta = meta.get("agentMeta", {})
         usage = agent_meta.get("usage", {})
-
         return {
             "text": text,
             "input_tokens": usage.get("input", 0),
             "output_tokens": usage.get("output", 0),
             "reasoning_tokens": usage.get("reasoning", 0),
-            "cache_read_tokens": usage.get("cacheRead", 0),
+            "cache_read_tokens": usage.get("totalCacheRead", 0) or usage.get("cacheRead", 0),
             "duration_ms": meta.get("durationMs", 0.0),
             "model": agent_meta.get("model"),
         }
@@ -794,26 +815,25 @@ class TaskRunner:
             logger.info(f"[{run_id}] Setting up workspace...")
             self.backend.setup_workspace(task)
 
-            # 2. Clear stale locks and reset session (local only)
+            # 2. Clear stale locks (local only)
             if isinstance(self.backend, LocalBackend):
                 _clear_stale_session_locks(self.agent_id)
-                self._reset_session()
-                await asyncio.sleep(1)  # brief pause after reset
 
             # 3. Build prompt — replace /workspace with actual path for local backend
             prompt = task.instruction
             if isinstance(self.backend, LocalBackend):
                 prompt = prompt.replace("/workspace", self.backend.workspace_path)
 
-            # 4. Send to agent (inside sandbox for Daytona, locally otherwise)
-            logger.info(f"[{run_id}] Sending to agent (timeout={task.timeout_sec}s)...")
+            # 4. Send to agent — use a fresh session-id per task to avoid stale context
+            session_id = f"bench-{task.scenario}-{task.name}-{int(time.time())}"
+            logger.info(f"[{run_id}] Sending to agent (timeout={task.timeout_sec}s, session={session_id})...")
             effective_timeout = task.timeout_sec * self.timeout_multiplier
             if hasattr(self.backend, "send_to_agent"):
                 agent_result = self.backend.send_to_agent(
-                    prompt, effective_timeout, agent_id=self.agent_id
+                    prompt, effective_timeout, agent_id=self.agent_id, session_id=session_id
                 )
             else:
-                agent_result = self._send_to_agent(prompt, effective_timeout)
+                agent_result = self._send_to_agent(prompt, effective_timeout, session_id=session_id)
             response_text = agent_result["text"]
 
             task_latency = time.time() - task_start
@@ -831,7 +851,8 @@ class TaskRunner:
                 f"[{run_id}] Result: {'PASS' if success else 'FAIL'} "
                 f"(reward={reward}, latency={task_latency:.1f}s, "
                 f"tokens: in={agent_result['input_tokens']} "
-                f"out={agent_result['output_tokens']})"
+                f"out={agent_result['output_tokens']} "
+                f"cache_read={agent_result['cache_read_tokens']})"
             )
 
             return TaskResult(
@@ -908,7 +929,8 @@ class TaskRunner:
         logger.info(f"Average latency: {suite.average_latency:.1f}s")
         logger.info(
             f"Tokens: in={suite.total_input_tokens} out={suite.total_output_tokens} "
-            f"reasoning={suite.total_reasoning_tokens} total={suite.total_tokens}"
+            f"reasoning={suite.total_reasoning_tokens} "
+            f"cache_read={suite.total_cache_read_tokens} total={suite.total_tokens}"
         )
 
         return suite

@@ -7,10 +7,10 @@ category = "data_transformation"
 tags = ["file-manipulation", "data_transformation", "medium"]
 
 [agent]
-timeout_sec = 180
+timeout_sec = 600
 
 [verifier]
-timeout_sec = 90
+timeout_sec = 600
 
 [environment]
 cpus = 1

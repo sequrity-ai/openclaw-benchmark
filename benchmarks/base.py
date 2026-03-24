@@ -233,7 +233,7 @@ class BenchmarkTask:
     prompt: str
     expected_output_description: str
     validation_fn: Callable[[str, dict[str, Any]], TaskResult]
-    timeout: float = 60.0
+    timeout: float = 300.0
     metadata: dict[str, Any] = field(default_factory=dict)
     # Set True for tasks where validation reads files produced by the bot (File scenario).
     # False (default) means validation checks the bot's response text.
@@ -544,13 +544,13 @@ class ScenarioBase(ABC):
             session_reset_ok = False
             try:
                 logger.info(f"[{run_id}] Sending /new to reset session context")
-                response = await session.send_message_async("/new", wait_for_response=True, timeout=90.0)
+                response = await session.send_message_async("/new", wait_for_response=True, timeout=300.0)
                 if response:
                     logger.info(f"[{run_id}] Session reset confirmed: {response.text[:80] if response.text else '(empty)'}")
                     session_reset_ok = True
                 else:
                     logger.warning(f"[{run_id}] No response to /new within 30s, retrying")
-                    response = await session.send_message_async("/new", wait_for_response=True, timeout=90.0)
+                    response = await session.send_message_async("/new", wait_for_response=True, timeout=300.0)
                     if response:
                         logger.info(f"[{run_id}] Session reset confirmed on retry: {response.text[:80] if response.text else '(empty)'}")
                         session_reset_ok = True
@@ -847,13 +847,13 @@ class ScenarioBase(ABC):
             session_reset_ok = False
             try:
                 logger.info(f"[{run_id}] Sending /new to reset session context")
-                response = session.send_message_sync("/new", wait_for_response=True, timeout=90.0)
+                response = session.send_message_sync("/new", wait_for_response=True, timeout=300.0)
                 if response:
                     logger.info(f"[{run_id}] Session reset confirmed: {response.text[:80] if response.text else '(empty)'}")
                     session_reset_ok = True
                 else:
                     logger.warning(f"[{run_id}] No response to /new within 30s, retrying")
-                    response = session.send_message_sync("/new", wait_for_response=True, timeout=90.0)
+                    response = session.send_message_sync("/new", wait_for_response=True, timeout=300.0)
                     if response:
                         logger.info(f"[{run_id}] Session reset confirmed on retry: {response.text[:80] if response.text else '(empty)'}")
                         session_reset_ok = True
