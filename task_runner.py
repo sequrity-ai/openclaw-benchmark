@@ -360,19 +360,13 @@ class DaytonaBackend:
         """Install openclaw and write config inside the sandbox."""
         logger.info("Installing openclaw in sandbox...")
 
-        # Install openclaw — upload local tarball if available, else npm registry
-        tarball = os.path.join(os.path.dirname(__file__), "..", "openclaw", "openclaw-2026.3.14.tgz")
-        if not os.path.exists(tarball):
-            tarball = os.path.expanduser("~/openclaw/openclaw-2026.3.14.tgz")
-        if os.path.exists(tarball):
-            logger.info(f"Uploading local tarball: {tarball}")
-            with open(tarball, "rb") as f:
-                self._sandbox.fs.upload_file(f.read(), "/tmp/openclaw.tgz")
-            r = self._sandbox.process.exec("npm install -g /tmp/openclaw.tgz", timeout=180)
-        else:
-            logger.info("No local tarball found, installing from npm")
-            r = self._sandbox.process.exec("npm install -g openclaw", timeout=120)
-        logger.info(f"npm install: {r.result.strip()[-200:] if r.result else '(no output)'}")
+        # Install openclaw from GitHub release tarball (pre-built from fork with sequrity FSM fix).
+        # To update: rebuild locally, create a new GitHub release, and update the URL below.
+        release_url = "https://github.com/Aaron-Zhao123/openclaw/releases/download/v2026.3.14/openclaw-2026.3.14.tgz"
+        logger.info(f"Installing openclaw from release: {release_url}")
+        r = self._sandbox.process.exec(f"npm install -g {release_url}", timeout=180)
+        logger.info(f"install stdout: {r.result.strip()[-500:] if r.result else '(no output)'}")
+        logger.info(f"install exit: {r.exit_code}")
 
         # Install python3 (node:22-bookworm has apt)
         self._sandbox.process.exec(
