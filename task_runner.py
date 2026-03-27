@@ -783,7 +783,7 @@ class TaskRunner:
         agent_meta = meta.get("agentMeta", {})
         usage = agent_meta.get("usage", {})
         last_call = agent_meta.get("lastCallUsage", {})
-        inp = usage.get("input", 0)
+        inp = usage.get("totalInput", 0) or usage.get("input", 0)
         # Log raw usage for debugging cache reads
         if inp > 36000:  # 3+ turns
             logger.debug(f"[cache-debug] usage={usage} lastCallUsage={last_call}")
@@ -888,6 +888,7 @@ class TaskRunner:
         except Exception as e:
             task_latency = time.time() - task_start
             logger.error(f"[{run_id}] Task error: {e}")
+            logger.info(f"[{run_id}] Result: FAIL (reward=0.0, latency={task_latency:.1f}s, tokens: in=0 out=0 cache_read=0)")
             return TaskResult(
                 task_name=task.name,
                 scenario=task.scenario,
