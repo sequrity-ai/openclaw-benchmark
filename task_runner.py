@@ -505,11 +505,11 @@ class DaytonaBackend:
         if test_sh.exists():
             with open(test_sh, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/tmp/test.sh")
-            self._sandbox.process.exec("bash /tmp/test.sh")
+            self._sandbox.process.exec(f"REWARD_DIR={reward_dir} bash /tmp/test.sh")
         elif test_py.exists():
             with open(test_py, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/tmp/test.py")
-            self._sandbox.process.exec("python3 /tmp/test.py")
+            self._sandbox.process.exec(f"REWARD_DIR={reward_dir} python3 /tmp/test.py")
         else:
             logger.error(f"No test script for {task.name}")
             return 0.0
