@@ -205,9 +205,13 @@ async def run_bench(args, config: TelegramConfig) -> None:
         timeout_multiplier=config.timeout_multiplier,
     )
 
-    # Run suite (gateway must be up for exec tool calls)
-    with ensure_gateway():
+    # Run suite (gateway must be up for local backend exec tool calls;
+    # daytona runs openclaw inside the workspace, so no local gateway needed)
+    if args.backend == "daytona":
         suite = await runner.run_suite(tasks, scenario_name=scenario_label)
+    else:
+        with ensure_gateway():
+            suite = await runner.run_suite(tasks, scenario_name=scenario_label)
 
     # Print summary
     print("\n" + "=" * 60)
