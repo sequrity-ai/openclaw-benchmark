@@ -35,7 +35,7 @@ class BenchmarkConfig(BaseSettings):
         description="Daytona API URL",
     )
     daytona_image: str = Field(
-        default="ubuntu:22.04",
+        default="node:22-bookworm",
         description="Docker image for Daytona sandbox",
     )
 
