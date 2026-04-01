@@ -462,7 +462,7 @@ class DaytonaBackend:
                 }
             },
             "tools": {
-                "exec": {"host": "sandbox"},
+                "exec": {"host": "gateway", "security": "full", "ask": "off"},
             },
             "gateway": {
                 "port": 18789,
@@ -489,6 +489,7 @@ class DaytonaBackend:
         self.model = model
         self._daytona = None
         self._sandbox = None
+        self._gog_installed = False
 
     def _get_client(self):
         if self._daytona is None:
@@ -508,11 +509,26 @@ class DaytonaBackend:
 
             client = self._get_client()
             logger.info("Creating Daytona sandbox...")
+
+            # Build env vars to inject into the sandbox
+            sandbox_env = {}
+            keyring_pw = os.environ.get("GOG_KEYRING_PASSWORD", "openclawbench")
+            sandbox_env["GOG_KEYRING_PASSWORD"] = keyring_pw
+            test_email = os.environ.get("GOG_TEST_EMAIL", "")
+            if test_email:
+                sandbox_env["GOG_ACCOUNT"] = test_email
+                sandbox_env["GOG_TEST_EMAIL"] = test_email
+
             self._sandbox = client.create(
-                CreateSandboxFromImageParams(image=self.image),
+                CreateSandboxFromImageParams(
+                    image=self.image,
+                    network_block_all=False,
+                    env_vars=sandbox_env,
+                ),
                 timeout=120,
             )
             self._sandbox.process.exec(f"mkdir -p {self.workspace_path}")
+            self._sandbox.process.exec(f"chmod 777 {self.workspace_path}")
             logger.info(f"Sandbox created: {self._sandbox.id}")
             self._install_openclaw()
 
@@ -559,41 +575,41 @@ class DaytonaBackend:
         else:
             logger.info("Using cached gog binary")
 
-        self._sandbox.fs.upload_file(cache_path.read_bytes(), "/usr/local/bin/gog")
-        self._sandbox.process.exec("chmod +x /usr/local/bin/gog")
+        # Install to /usr/bin so it's on PATH for all users (openclaw agent may run as non-root)
+        self._sandbox.fs.upload_file(cache_path.read_bytes(), "/usr/bin/gog")
+        self._sandbox.process.exec("chmod +x /usr/bin/gog")
         r = self._sandbox.process.exec("gog --version")
         logger.info(f"gog version: {r.result.strip()}")
 
-        # Import OAuth client credentials + refresh token into the sandbox.
-        # GOG_KEYRING_PASSWORD is needed because there's no OS keychain in the sandbox.
-        # GOG_ACCOUNT tells gog which account to use without --account flag.
+        # GOG_KEYRING_PASSWORD, GOG_ACCOUNT, GOG_TEST_EMAIL are set via
+        # env_vars in CreateSandboxFromImageParams (see _ensure_sandbox).
         keyring_pw = os.environ.get("GOG_KEYRING_PASSWORD", "openclawbench")
         test_email = os.environ.get("GOG_TEST_EMAIL", "")
-
-        # Set these persistently in the sandbox's environment
-        self._sandbox.process.exec(
-            f'echo "export GOG_KEYRING_PASSWORD=\'{keyring_pw}\'" >> /root/.bashrc'
-        )
-        if test_email:
-            self._sandbox.process.exec(
-                f'echo "export GOG_ACCOUNT=\'{test_email}\'" >> /root/.bashrc'
-            )
-
         env_cmd = f"export GOG_KEYRING_PASSWORD='{keyring_pw}'"
         if test_email:
             env_cmd += f" GOG_ACCOUNT='{test_email}'"
 
         # Upload OAuth client credentials JSON (client ID + secret).
         # gog needs this to exchange refresh tokens for access tokens.
-        creds_file = os.environ.get("GOG_CREDENTIALS_FILE", os.path.expanduser("~/.config/gogcli/credentials.json"))
-        creds_path = os.path.expanduser(creds_file)
-        if os.path.exists(creds_path):
+        # Check GOG_CREDENTIALS_FILE, then macOS path, then Linux path.
+        creds_path = None
+        for candidate in [
+            os.environ.get("GOG_CREDENTIALS_FILE", ""),
+            os.path.expanduser("~/Library/Application Support/gogcli/credentials.json"),
+            os.path.expanduser("~/.config/gogcli/credentials.json"),
+        ]:
+            if candidate and os.path.exists(candidate):
+                creds_path = candidate
+                break
+        if creds_path:
             self._sandbox.process.exec("mkdir -p /root/.config/gogcli")
             with open(creds_path, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/root/.config/gogcli/credentials.json")
             logger.info("Uploaded OAuth client credentials to sandbox")
         else:
-            raise RuntimeError(f"OAuth credentials not found at {creds_path}")
+            raise RuntimeError(
+                "OAuth client credentials not found. Run: gog auth credentials /path/to/client_secret.json"
+            )
 
         # Upload and import refresh token
         token_file = os.environ.get("GOG_TOKEN_FILE")
@@ -641,8 +657,27 @@ class DaytonaBackend:
         r = self._sandbox.process.exec("openclaw --version")
         logger.info(f"openclaw version: {r.result.strip()}")
 
-        # Log the config for debugging
-        logger.info("Sandbox config: workspace=/workspace, sandbox=off, exec.host=node")
+        # Start the openclaw gateway — required for exec.host=node tool execution.
+        # Run in background and wait for it to become healthy.
+        logger.info("Starting openclaw gateway in sandbox...")
+        self._sandbox.process.exec(
+            "nohup openclaw gateway run > /tmp/gateway.log 2>&1 &"
+        )
+        for attempt in range(12):
+            time.sleep(5)
+            r = self._sandbox.process.exec("openclaw health 2>&1 || true")
+            health_out = r.result.strip() if r.result else ""
+            if r.exit_code == 0 and "error" not in health_out.lower():
+                logger.info(f"Gateway is up (attempt {attempt + 1})")
+                break
+            logger.debug(f"Gateway health check {attempt + 1}: exit={r.exit_code} out={health_out[:200]}")
+        else:
+            # Log gateway output for debugging
+            r = self._sandbox.process.exec("cat /tmp/gateway.log 2>/dev/null | tail -20")
+            logger.error(f"Gateway failed to start. Log: {r.result.strip() if r.result else '(empty)'}")
+            raise RuntimeError("openclaw gateway failed to start in sandbox within 60s")
+
+        logger.info("Sandbox config: workspace=/workspace, sandbox=off, exec.host=gateway")
 
     def send_to_agent(
         self, message: str, timeout: float, agent_id: str = "main", session_id: str | None = None
@@ -704,9 +739,10 @@ class DaytonaBackend:
     def setup_workspace(self, task: TaskSpec) -> None:
         self._ensure_sandbox()
 
-        # Install gog in sandbox if task requires it
-        if task.category and task.category.startswith("gog"):
+        # Install gog in sandbox if task requires it (once per sandbox)
+        if task.category and task.category.startswith("gog") and not self._gog_installed:
             self._install_gog()
+            self._gog_installed = True
 
         env = self._env_prefix()
         setup_py = task.path / "environment" / "setup_workspace.py"
@@ -715,6 +751,11 @@ class DaytonaBackend:
         if setup_py.exists():
             with open(setup_py, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/tmp/setup_workspace.py")
+            # Upload any sibling Python modules (e.g. gog_helper.py) so imports work
+            scenario_dir = task.path.parent
+            for helper in scenario_dir.glob("*.py"):
+                with open(helper, "rb") as f:
+                    self._sandbox.fs.upload_file(f.read(), f"/tmp/{helper.name}")
             r = self._sandbox.process.exec(
                 f"bash -c '{env}python3 /tmp/setup_workspace.py {self.workspace_path}'",
                 timeout=180,
@@ -1246,13 +1287,16 @@ class TaskRunner:
             elif not os.path.exists(os.path.expanduser(token_file)):
                 errors.append(f"GOG_TOKEN_FILE points to a missing file: {token_file}")
 
-            creds_file = os.environ.get(
-                "GOG_CREDENTIALS_FILE",
-                os.path.expanduser("~/.config/gogcli/credentials.json"),
+            creds_found = any(
+                os.path.exists(p) for p in [
+                    os.environ.get("GOG_CREDENTIALS_FILE", ""),
+                    os.path.expanduser("~/Library/Application Support/gogcli/credentials.json"),
+                    os.path.expanduser("~/.config/gogcli/credentials.json"),
+                ] if p
             )
-            if not os.path.exists(os.path.expanduser(creds_file)):
+            if not creds_found:
                 errors.append(
-                    f"OAuth client credentials not found at {creds_file}.\n"
+                    "OAuth client credentials not found.\n"
                     "  Download from Google Cloud Console and run:\n"
                     "  gog auth credentials /path/to/client_secret_XXXXX.json"
                 )

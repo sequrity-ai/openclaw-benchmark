@@ -1,0 +1,1 @@
+Using the gog CLI, search for emails with the label in /workspace/test_label.txt. Find the email thread about the homepage redesign. Who sent the most recent reply and what was the key decision made? Report the person's name and the decision.

@@ -1,0 +1,1 @@
+Using the gog CLI, search for emails with the label in /workspace/test_label.txt. Find the email whose subject contains an invoice number and report the full subject line (without the label prefix before the pipe character).
