@@ -113,16 +113,25 @@ The `gog-gmail` scenario interacts with a real Gmail account via the [`gog`](htt
 
 ### Run locally
 
+Add the required variables to `.env` (or export them):
+
 ```bash
-export GOG_TEST_EMAIL="your-test@gmail.com"
+GOG_TEST_EMAIL=your-test@gmail.com
+```
+
+```bash
 uv run python run.py --task tasks/gog-gmail/count-unread
 ```
 
 ### Run on Daytona
 
 ```bash
-export GOG_TEST_EMAIL="your-test@gmail.com"
-export GOG_TOKEN_FILE=~/.gog-token.json
+GOG_TEST_EMAIL=your-test@gmail.com
+GOG_TOKEN_FILE=~/.gog-token.json
+OPENAI_API_KEY=sk-...
+```
+
+```bash
 uv run python run.py --backend daytona --task tasks/gog-gmail/count-unread --provider=openai --model=gpt-5.2
 ```
 
