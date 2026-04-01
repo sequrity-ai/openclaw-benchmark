@@ -136,9 +136,23 @@ Configuration via `.env` or environment variables:
 AGENT_ID=main               # OpenClaw agent to use (default: main)
 TIMEOUT_MULTIPLIER=1.0      # Scale all timeouts (use >1 on slow machines)
 BOT_WORKSPACE_PATH=/tmp/openclaw_benchmark  # Local workspace path
-OPENAI_API_KEY=sk-...       # Required for --provider openai
-ANTHROPIC_API_KEY=sk-ant-...  # Required for --provider anthropic
 ```
+
+### Provider API keys (Daytona backend)
+
+When using `--backend daytona`, the runner reads the provider's API key from the environment and injects it into the sandbox's openclaw config. Set the key in `.env` or export it:
+
+| Provider | Env Var |
+|----------|---------|
+| `openai` | `OPENAI_API_KEY` |
+| `anthropic` | `ANTHROPIC_API_KEY` |
+| `google` | `GEMINI_API_KEY` |
+| `groq` | `GROQ_API_KEY` |
+| `mistral` | `MISTRAL_API_KEY` |
+| `xai` | `XAI_API_KEY` |
+| `together` | `TOGETHER_API_KEY` |
+
+Custom providers follow the convention `<PROVIDER>_API_KEY` and `<PROVIDER>_BASE_URL`.
 
 ## Project Structure
 
