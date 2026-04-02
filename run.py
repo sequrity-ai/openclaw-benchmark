@@ -103,6 +103,11 @@ def create_backend(
 ):
     """Create the appropriate workspace backend."""
     if backend_name == "local":
+        if provider != "sequrity" or model != "gpt-5.2":
+            raise NotImplementedError(
+                "--provider/--model are not supported with --backend=local; "
+                "configure the provider in ~/.openclaw/openclaw.json instead"
+            )
         return LocalBackend(config.bot_workspace_path)
     elif backend_name == "daytona":
         if not config.daytona_api_key:

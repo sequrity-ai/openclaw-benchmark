@@ -340,6 +340,11 @@ class DaytonaBackend:
             "baseUrl": "https://api.together.xyz/v1",
             "api": "openai-completions",
         },
+        "openrouter": {
+            "env_var": "OPENROUTER_API_KEY",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "api": "openai-completions",
+        },
     }
 
     @staticmethod
