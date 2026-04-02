@@ -198,6 +198,34 @@ class LocalBackend:
         else:
             logger.info(f"No setup script for task {task.name}")
 
+    def teardown_task(self, task: TaskSpec) -> None:
+        """Run the task's teardown script (e.g. to clean up external resources)."""
+        teardown_sh = task.path / "environment" / "teardown.sh"
+        teardown_py = task.path / "environment" / "teardown.py"
+
+        if teardown_sh.exists():
+            result = subprocess.run(
+                ["bash", str(teardown_sh), self.workspace_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Teardown failed: {result.stderr.strip()}")
+            else:
+                logger.info(f"Teardown complete: {teardown_sh}")
+        elif teardown_py.exists():
+            result = subprocess.run(
+                ["python3", str(teardown_py), self.workspace_path],
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                logger.warning(f"Teardown failed: {result.stderr.strip()}")
+            else:
+                logger.info(f"Teardown complete: {teardown_py}")
+
     def cleanup_workspace(self) -> None:
         if os.path.exists(self.workspace_path):
             shutil.rmtree(self.workspace_path)
@@ -312,6 +340,11 @@ class DaytonaBackend:
             "baseUrl": "https://api.together.xyz/v1",
             "api": "openai-completions",
         },
+        "openrouter": {
+            "env_var": "OPENROUTER_API_KEY",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "api": "openai-completions",
+        },
     }
 
     @staticmethod
@@ -357,12 +390,13 @@ class DaytonaBackend:
         }
 
     @classmethod
-    def _build_openclaw_config(cls, provider: str, model: str) -> dict:
+    def _build_openclaw_config(cls, provider: str, model: str, gateway_port: int = 18789) -> dict:
         """Build openclaw config for the sandbox.
 
         Args:
             provider: Provider name (e.g. "sequrity", "openai", "anthropic").
             model: Model ID (e.g. "gpt-5.2", "claude-sonnet-4-6", "gpt-5.4").
+            gateway_port: Port for the openclaw gateway inside the sandbox.
         """
         # --- provider-specific models block ---
         providers_block: dict[str, Any] = {}
@@ -434,10 +468,10 @@ class DaytonaBackend:
                 }
             },
             "tools": {
-                "exec": {"host": "sandbox"},
+                "exec": {"host": "gateway", "security": "full", "ask": "off"},
             },
             "gateway": {
-                "port": 18789,
+                "port": gateway_port,
                 "mode": "local",
                 "bind": "loopback",
                 "auth": {"mode": "token", "token": "sandbox_bench_token"},
@@ -452,6 +486,7 @@ class DaytonaBackend:
         workspace_path: str = "/workspace",
         provider: str = "sequrity",
         model: str = "gpt-5.2",
+        gateway_port: int = 18789,
     ):
         self.api_key = api_key
         self.api_url = api_url
@@ -459,8 +494,10 @@ class DaytonaBackend:
         self.workspace_path = workspace_path
         self.provider = provider
         self.model = model
+        self.gateway_port = gateway_port
         self._daytona = None
         self._sandbox = None
+        self._gog_installed = False
 
     def _get_client(self):
         if self._daytona is None:
@@ -480,13 +517,123 @@ class DaytonaBackend:
 
             client = self._get_client()
             logger.info("Creating Daytona sandbox...")
+
+            # Build env vars to inject into the sandbox
+            sandbox_env = {}
+            keyring_pw = os.environ.get("GOG_KEYRING_PASSWORD", "openclawbench")
+            sandbox_env["GOG_KEYRING_PASSWORD"] = keyring_pw
+            test_email = os.environ.get("GOG_TEST_EMAIL", "")
+            if test_email:
+                sandbox_env["GOG_ACCOUNT"] = test_email
+                sandbox_env["GOG_TEST_EMAIL"] = test_email
+
             self._sandbox = client.create(
-                CreateSandboxFromImageParams(image=self.image),
+                CreateSandboxFromImageParams(
+                    image=self.image,
+                    network_block_all=False,
+                    env_vars=sandbox_env,
+                ),
                 timeout=120,
             )
             self._sandbox.process.exec(f"mkdir -p {self.workspace_path}")
+            self._sandbox.process.exec(f"chmod 777 {self.workspace_path}")
             logger.info(f"Sandbox created: {self._sandbox.id}")
             self._install_openclaw()
+
+    # Environment variables to forward from host into sandbox commands.
+    _FORWARDED_ENV_VARS = ["GOG_TEST_EMAIL", "GOG_KEYRING_PASSWORD", "GOG_ACCOUNT"]
+
+    def _env_prefix(self) -> str:
+        """Build an 'export K=V; ...' string for forwarded env vars."""
+        defaults = {
+            "GOG_KEYRING_PASSWORD": "openclawbench",
+            "GOG_ACCOUNT": os.environ.get("GOG_TEST_EMAIL", ""),
+        }
+        parts = []
+        for key in self._FORWARDED_ENV_VARS:
+            val = os.environ.get(key) or defaults.get(key)
+            if val:
+                escaped = val.replace("'", "'\\''")
+                parts.append(f"export {key}='{escaped}'")
+        return "; ".join(parts) + "; " if parts else ""
+
+    def _install_gog(self):
+        """Install the gog CLI and import auth token into the sandbox.
+
+        Requires GOG_TOKEN_FILE env var pointing to a token file exported via:
+            gog auth tokens export <email> --output ~/.gog-token.json
+        """
+        logger.info("Installing gog in sandbox...")
+        # Download linux binary on host, then upload to sandbox (faster than curl inside sandbox)
+        import io
+        import tarfile
+        import tempfile
+        import urllib.request
+
+        release_url = "https://github.com/steipete/gogcli/releases/download/v0.12.0/gogcli_0.12.0_linux_amd64.tar.gz"
+        cache_path = Path(tempfile.gettempdir()) / "gog_linux_amd64"
+        if not cache_path.exists():
+            logger.info(f"Downloading gog from {release_url} ...")
+            with urllib.request.urlopen(release_url, timeout=60) as resp:
+                tar_bytes = resp.read()
+            with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:gz") as tar:
+                member = tar.getmember("gog")
+                f = tar.extractfile(member)
+                cache_path.write_bytes(f.read())
+            logger.info(f"Downloaded gog binary ({cache_path.stat().st_size} bytes)")
+        else:
+            logger.info("Using cached gog binary")
+
+        # Install to /usr/bin so it's on PATH for all users (openclaw agent may run as non-root)
+        self._sandbox.fs.upload_file(cache_path.read_bytes(), "/usr/bin/gog")
+        self._sandbox.process.exec("chmod +x /usr/bin/gog")
+        r = self._sandbox.process.exec("gog --version")
+        logger.info(f"gog version: {r.result.strip()}")
+
+        # GOG_KEYRING_PASSWORD, GOG_ACCOUNT, GOG_TEST_EMAIL are set via
+        # env_vars in CreateSandboxFromImageParams (see _ensure_sandbox).
+        keyring_pw = os.environ.get("GOG_KEYRING_PASSWORD", "openclawbench")
+        test_email = os.environ.get("GOG_TEST_EMAIL", "")
+        env_cmd = f"export GOG_KEYRING_PASSWORD='{keyring_pw}'"
+        if test_email:
+            env_cmd += f" GOG_ACCOUNT='{test_email}'"
+
+        # Upload OAuth client credentials JSON (client ID + secret).
+        # gog needs this to exchange refresh tokens for access tokens.
+        # Check GOG_CREDENTIALS_FILE, then macOS path, then Linux path.
+        creds_path = None
+        for candidate in [
+            os.environ.get("GOG_CREDENTIALS_FILE", ""),
+            os.path.expanduser("~/Library/Application Support/gogcli/credentials.json"),
+            os.path.expanduser("~/.config/gogcli/credentials.json"),
+        ]:
+            if candidate and os.path.exists(candidate):
+                creds_path = candidate
+                break
+        if creds_path:
+            self._sandbox.process.exec("mkdir -p /root/.config/gogcli")
+            with open(creds_path, "rb") as f:
+                self._sandbox.fs.upload_file(f.read(), "/root/.config/gogcli/credentials.json")
+            logger.info("Uploaded OAuth client credentials to sandbox")
+        else:
+            raise RuntimeError(
+                "OAuth client credentials not found. Run: gog auth credentials /path/to/client_secret.json"
+            )
+
+        # Upload and import refresh token
+        token_file = os.environ.get("GOG_TOKEN_FILE")
+        if not token_file:
+            raise RuntimeError("GOG_TOKEN_FILE is not set")
+        token_path = os.path.expanduser(token_file)
+        if not os.path.exists(token_path):
+            raise RuntimeError(f"GOG_TOKEN_FILE not found: {token_path}")
+        with open(token_path, "rb") as f:
+            self._sandbox.fs.upload_file(f.read(), "/tmp/gog-token.json")
+        r = self._sandbox.process.exec(
+            f"bash -c '{env_cmd}; gog auth tokens import /tmp/gog-token.json'"
+        )
+        logger.info(f"gog token import: {r.result.strip()}")
+        self._sandbox.process.exec("rm /tmp/gog-token.json")
 
     def _install_openclaw(self):
         """Install openclaw and write config inside the sandbox."""
@@ -507,7 +654,9 @@ class DaytonaBackend:
         )
 
         # Write openclaw config
-        config_json = json.dumps(self._build_openclaw_config(self.provider, self.model), indent=2)
+        config_json = json.dumps(
+            self._build_openclaw_config(self.provider, self.model, self.gateway_port), indent=2
+        )
         self._sandbox.process.exec("mkdir -p /root/.openclaw")
         self._sandbox.fs.upload_file(
             config_json.encode("utf-8"),
@@ -519,8 +668,27 @@ class DaytonaBackend:
         r = self._sandbox.process.exec("openclaw --version")
         logger.info(f"openclaw version: {r.result.strip()}")
 
-        # Log the config for debugging
-        logger.info("Sandbox config: workspace=/workspace, sandbox=off, exec.host=node")
+        # Start the openclaw gateway — required for exec.host=node tool execution.
+        # Run in background and wait for it to become healthy.
+        logger.info("Starting openclaw gateway in sandbox...")
+        self._sandbox.process.exec(
+            "nohup openclaw gateway run > /tmp/gateway.log 2>&1 &"
+        )
+        for attempt in range(12):
+            time.sleep(5)
+            r = self._sandbox.process.exec("openclaw health 2>&1 || true")
+            health_out = r.result.strip() if r.result else ""
+            if r.exit_code == 0 and "error" not in health_out.lower():
+                logger.info(f"Gateway is up (attempt {attempt + 1})")
+                break
+            logger.debug(f"Gateway health check {attempt + 1}: exit={r.exit_code} out={health_out[:200]}")
+        else:
+            # Log gateway output for debugging
+            r = self._sandbox.process.exec("cat /tmp/gateway.log 2>/dev/null | tail -20")
+            logger.error(f"Gateway failed to start. Log: {r.result.strip() if r.result else '(empty)'}")
+            raise RuntimeError("openclaw gateway failed to start in sandbox within 60s")
+
+        logger.info("Sandbox config: workspace=/workspace, sandbox=off, exec.host=gateway")
 
     def send_to_agent(
         self, message: str, timeout: float, agent_id: str = "main", session_id: str | None = None
@@ -582,18 +750,59 @@ class DaytonaBackend:
     def setup_workspace(self, task: TaskSpec) -> None:
         self._ensure_sandbox()
 
+        # Install gog in sandbox if task requires it (once per sandbox)
+        if task.category and task.category.startswith("gog") and not self._gog_installed:
+            self._install_gog()
+            self._gog_installed = True
+
+        env = self._env_prefix()
         setup_py = task.path / "environment" / "setup_workspace.py"
         setup_sh = task.path / "environment" / "setup.sh"
 
         if setup_py.exists():
             with open(setup_py, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/tmp/setup_workspace.py")
-            r = self._sandbox.process.exec(f"python3 /tmp/setup_workspace.py {self.workspace_path}")
+            # Upload any sibling Python modules (e.g. gog_helper.py) so imports work
+            scenario_dir = task.path.parent
+            for helper in scenario_dir.glob("*.py"):
+                with open(helper, "rb") as f:
+                    self._sandbox.fs.upload_file(f.read(), f"/tmp/{helper.name}")
+            r = self._sandbox.process.exec(
+                f"bash -c '{env}python3 /tmp/setup_workspace.py {self.workspace_path}'",
+                timeout=180,
+            )
             logger.info(f"Setup: {r.result.strip()}")
         elif setup_sh.exists():
             with open(setup_sh, "rb") as f:
                 self._sandbox.fs.upload_file(f.read(), "/tmp/setup.sh")
-            self._sandbox.process.exec(f"bash /tmp/setup.sh {self.workspace_path}")
+            self._sandbox.process.exec(
+                f"bash -c '{env}bash /tmp/setup.sh {self.workspace_path}'",
+                timeout=180,
+            )
+
+    def teardown_task(self, task: TaskSpec) -> None:
+        """Run the task's teardown script inside the sandbox."""
+        self._ensure_sandbox()
+        env = self._env_prefix()
+        teardown_sh = task.path / "environment" / "teardown.sh"
+        teardown_py = task.path / "environment" / "teardown.py"
+
+        if teardown_sh.exists():
+            with open(teardown_sh, "rb") as f:
+                self._sandbox.fs.upload_file(f.read(), "/tmp/teardown.sh")
+            r = self._sandbox.process.exec(
+                f"bash -c '{env}bash /tmp/teardown.sh {self.workspace_path}'",
+                timeout=120,
+            )
+            logger.info(f"Teardown: {r.result.strip()}")
+        elif teardown_py.exists():
+            with open(teardown_py, "rb") as f:
+                self._sandbox.fs.upload_file(f.read(), "/tmp/teardown.py")
+            r = self._sandbox.process.exec(
+                f"bash -c '{env}python3 /tmp/teardown.py {self.workspace_path}'",
+                timeout=120,
+            )
+            logger.info(f"Teardown: {r.result.strip()}")
 
     def cleanup_workspace(self) -> None:
         """Clean workspace directory inside the sandbox (keeps sandbox alive)."""
@@ -1039,7 +1248,7 @@ class TaskRunner:
 
         except Exception as e:
             task_latency = time.time() - task_start
-            logger.error(f"[{run_id}] Task error: {e}")
+            logger.error(f"[{run_id}] Task error: {e}", exc_info=True)
             logger.info(
                 f"[{run_id}] Result: FAIL (reward=0.0, latency={task_latency:.1f}s, tokens: in=0 out=0 cache_read=0)"
             )
@@ -1054,32 +1263,100 @@ class TaskRunner:
                 error_message=str(e),
             )
 
+    def _preflight_check(self, tasks: list[TaskSpec]) -> None:
+        """Validate environment before running tasks. Raises RuntimeError on failure."""
+        has_gog_tasks = any(
+            t.category and t.category.startswith("gog") for t in tasks
+        )
+        if not has_gog_tasks:
+            return
+
+        errors = []
+
+        # GOG_TEST_EMAIL is always required
+        if not os.environ.get("GOG_TEST_EMAIL"):
+            errors.append("GOG_TEST_EMAIL is not set. Set it to the Gmail address for test emails.")
+
+        # Local backend: gog must be on PATH and authenticated
+        if isinstance(self.backend, LocalBackend):
+            if not shutil.which("gog"):
+                errors.append(
+                    "gog CLI not found on PATH. Install it:\n"
+                    "  macOS: brew install steipete/tap/gogcli\n"
+                    "  Linux: see https://github.com/steipete/gogcli/releases"
+                )
+
+        # Daytona backend: need token file and credentials
+        if isinstance(self.backend, DaytonaBackend):
+            token_file = os.environ.get("GOG_TOKEN_FILE")
+            if not token_file:
+                errors.append(
+                    "GOG_TOKEN_FILE is not set. Export your refresh token first:\n"
+                    "  gog auth tokens export <email> --output ~/.gog-token.json\n"
+                    "  export GOG_TOKEN_FILE=~/.gog-token.json"
+                )
+            elif not os.path.exists(os.path.expanduser(token_file)):
+                errors.append(f"GOG_TOKEN_FILE points to a missing file: {token_file}")
+
+            creds_found = any(
+                os.path.exists(p) for p in [
+                    os.environ.get("GOG_CREDENTIALS_FILE", ""),
+                    os.path.expanduser("~/Library/Application Support/gogcli/credentials.json"),
+                    os.path.expanduser("~/.config/gogcli/credentials.json"),
+                ] if p
+            )
+            if not creds_found:
+                errors.append(
+                    "OAuth client credentials not found.\n"
+                    "  Download from Google Cloud Console and run:\n"
+                    "  gog auth credentials /path/to/client_secret_XXXXX.json"
+                )
+
+        if errors:
+            msg = "gog-gmail pre-flight check failed:\n\n" + "\n\n".join(
+                f"  [{i+1}] {e}" for i, e in enumerate(errors)
+            )
+            raise RuntimeError(msg)
+
     async def run_suite(
         self,
         tasks: list[TaskSpec],
         scenario_name: str = "all",
     ) -> SuiteResult:
         """Run a suite of tasks sequentially."""
+        self._preflight_check(tasks)
+
         start_time = time.time()
         results = []
 
-        for i, task in enumerate(tasks, 1):
-            logger.info(f"===== Task {i}/{len(tasks)}: {task.scenario}/{task.name} =====")
+        try:
+            for i, task in enumerate(tasks, 1):
+                logger.info(f"===== Task {i}/{len(tasks)}: {task.scenario}/{task.name} =====")
 
-            # Wait between tasks for session lock release
-            if i > 1:
-                logger.info("Waiting 3s for session lock release...")
-                await asyncio.sleep(3)
+                # Wait between tasks for session lock release
+                if i > 1:
+                    logger.info("Waiting 3s for session lock release...")
+                    await asyncio.sleep(3)
 
-            result = await self.run_task(task)
-            results.append(result)
+                result = await self.run_task(task)
+                results.append(result)
 
-            # Cleanup workspace between tasks
-            self.backend.cleanup_workspace()
+                # Run teardown (clean up external resources like Gmail, APIs, etc.)
+                if hasattr(self.backend, "teardown_task"):
+                    try:
+                        self.backend.teardown_task(task)
+                    except Exception as e:
+                        logger.warning(f"Teardown failed for {task.name}: {e}")
 
-        # Destroy sandbox if using Daytona
-        if hasattr(self.backend, "destroy"):
-            self.backend.destroy()
+                # Cleanup workspace between tasks
+                self.backend.cleanup_workspace()
+        finally:
+            # Always destroy sandbox, even on unexpected errors
+            if hasattr(self.backend, "destroy"):
+                try:
+                    self.backend.destroy()
+                except Exception as e:
+                    logger.error(f"Failed to destroy sandbox during cleanup: {e}")
 
         end_time = time.time()
 
@@ -1113,8 +1390,13 @@ def export_results(suite: SuiteResult, output_path: Path) -> None:
     """Export results to JSON or Markdown."""
     data = suite.to_dict()
 
-    # Add summary
+    # Add summary with run metadata for easy aggregation across CI matrix jobs
     data["summary"] = {
+        "provider": suite.metadata.get("provider", ""),
+        "model": suite.metadata.get("model", ""),
+        "backend": suite.metadata.get("backend", ""),
+        "scenario": suite.scenario_name,
+        "difficulty": suite.metadata.get("difficulty", "all"),
         "total_tasks": len(suite.task_results),
         "tasks_passed": sum(1 for t in suite.task_results if t.success),
         "tasks_failed": sum(1 for t in suite.task_results if not t.success),
@@ -1139,13 +1421,19 @@ def export_results(suite: SuiteResult, output_path: Path) -> None:
 
 def _export_markdown(data: dict, output_path: Path) -> None:
     """Export results as a Markdown report."""
+    summary = data["summary"]
+    provider = summary.get("provider", "")
+    model = summary.get("model", "")
+    model_label = f" — {provider}/{model}" if provider else ""
     lines = [
-        f"# Benchmark Results: {data['scenario_name']}",
+        f"# Benchmark Results: {data['scenario_name']}{model_label}",
         "",
+        f"**Provider**: {provider}/{model}" if provider else "",
+        f"**Backend**: {summary.get('backend', '')}",
         f"**Duration**: {data['total_duration']:.1f}s",
-        f"**Tasks**: {data['summary']['tasks_passed']}/{data['summary']['total_tasks']} passed",
-        f"**Accuracy**: {data['summary']['overall_accuracy']:.1f}%",
-        f"**Total Tokens**: {data['summary']['total_tokens']}",
+        f"**Tasks**: {summary['tasks_passed']}/{summary['total_tasks']} passed",
+        f"**Accuracy**: {summary['overall_accuracy']:.1f}%",
+        f"**Total Tokens**: {summary['total_tokens']}",
         "",
         "## Results",
         "",

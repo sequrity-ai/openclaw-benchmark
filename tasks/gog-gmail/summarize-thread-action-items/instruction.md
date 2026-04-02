@@ -1,0 +1,1 @@
+Using the gog CLI, search for emails with the label in /workspace/test_label.txt. Find the email thread about the product launch. List all action items mentioned, including who is responsible and their deadlines.

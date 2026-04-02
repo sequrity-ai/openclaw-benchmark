@@ -1,0 +1,1 @@
+Using the gog CLI, read all emails with the label in /workspace/test_label.txt. Categorize each email into one of three categories: Billing, Meetings, or Project Updates. Report how many emails are in each category.

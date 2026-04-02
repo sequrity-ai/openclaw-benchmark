@@ -1,6 +1,6 @@
 # OpenClaw Benchmark
 
-A benchmark suite for evaluating OpenClaw agent performance across 7 scenarios and 63 tasks.
+A benchmark suite for evaluating LLM agent performance across multiple providers. Supports local execution and cloud sandboxes via Daytona, designed to run in CI.
 
 ## How It Works
 
@@ -10,50 +10,162 @@ Each task has:
 - A **reference solution** (`solve.sh`) that can be run to verify correctness
 - A **verifier** (`test.sh`) that checks the agent's output and writes `0` or `1` to `$REWARD_DIR/reward.txt`
 
-The runner sends each task to `openclaw agent` as a local subprocess and scores the result.
+The runner sends each task to `openclaw agent`, scores the result, and exits non-zero if any task fails.
 
 ## Prerequisites
 
 - Python 3.13+
 - [`uv`](https://docs.astral.sh/uv/) package manager
-- `openclaw` CLI installed and on `$PATH`
+- `openclaw` CLI installed and on `$PATH` (local backend only)
 
 ## Installation
 
 ```bash
+cp .env.example .env   # fill in your API keys
 uv sync
 ```
 
-## Running Benchmarks
+## Quick Start
 
 ```bash
 # List all tasks
 uv run python run.py --list
 
-# Run all scenarios (63 tasks)
-uv run python run.py --all
-
-# Run a single scenario
+# Run locally (uses ~/.openclaw/openclaw.json config)
 uv run python run.py --scenario file
-uv run python run.py --scenario weather
-uv run python run.py --scenario web
-uv run python run.py --scenario summarize
-uv run python run.py --scenario github
-uv run python run.py --scenario gmail
-uv run python run.py --scenario compound
 
-# Run a single task
-uv run python run.py --task tasks/file/file-organization
-
-# Filter by difficulty
-uv run python run.py --scenario file --difficulty easy
-
-# Verify reference solutions pass
-uv run python run.py --verify-only --scenario file
-
-# Export results to JSON
-uv run python run.py --all -o results.json
+# Run on Daytona with a specific provider/model
+uv run python run.py \
+  --backend daytona \
+  --provider openrouter \
+  --model anthropic/claude-sonnet-4 \
+  --scenario file \
+  --output results.json
 ```
+
+## CLI Reference
+
+```
+uv run python run.py [OPTIONS]
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--scenario, -s` | Scenario to run (`file`, `weather`, `web`, etc. or `all`) | `all` |
+| `--task, -t` | Run a single task by path | |
+| `--backend, -b` | `local` or `daytona` | `local` |
+| `--provider, -p` | LLM provider (Daytona only) | `sequrity` |
+| `--model, -m` | Model ID (Daytona only) | `gpt-5.2` |
+| `--difficulty, -d` | Filter by difficulty (`easy`, `medium`, `hard`, `all`) | `all` |
+| `--output, -o` | Export results to file (`.json` or `.md`) | |
+| `--timeout-multiplier` | Scale all task timeouts | `1.0` |
+| `--agent-id` | OpenClaw agent ID | `main` |
+| `--gateway-port` | openclaw gateway port | `18789` |
+| `--list` | List available tasks and exit | |
+| `--verify-only` | Verify reference solutions pass all tests | |
+| `-v, --verbose` | Enable debug logging | |
+
+## Providers
+
+When using `--backend daytona`, the runner reads the provider's API key from the environment and injects it into the sandbox.
+
+| Provider | Env Var | Example Model |
+|----------|---------|---------------|
+| `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-6` |
+| `openrouter` | `OPENROUTER_API_KEY` | `anthropic/claude-sonnet-4` |
+| `google` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
+| `groq` | `GROQ_API_KEY` | `llama-3.1-70b` |
+| `mistral` | `MISTRAL_API_KEY` | `mistral-large-latest` |
+| `xai` | `XAI_API_KEY` | `grok-2` |
+| `together` | `TOGETHER_API_KEY` | `meta-llama/llama-3.1-70b-instruct` |
+
+Custom providers follow the convention `<PROVIDER>_API_KEY` and `<PROVIDER>_BASE_URL`.
+
+## Configuration
+
+All config can be set via environment variables, `.env` file, or CLI flags. Precedence: **CLI flags > env vars > .env file**.
+
+See [.env.example](.env.example) for all available variables.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DAYTONA_API_KEY` | Daytona API key (required for `--backend daytona`) | |
+| `AGENT_ID` | OpenClaw agent to use | `main` |
+| `TIMEOUT_MULTIPLIER` | Scale all timeouts | `1.0` |
+| `GATEWAY_PORT` | openclaw gateway port | `18789` |
+| `BOT_WORKSPACE_PATH` | Local workspace path | `/tmp/openclaw_benchmark` |
+
+## CI Usage
+
+This repo is designed to be used as a submodule in a CI pipeline. Example GitHub Actions step:
+
+```yaml
+- name: Run benchmark
+  env:
+    DAYTONA_API_KEY: ${{ secrets.DAYTONA_API_KEY }}
+    OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+  run: |
+    cd openclawbench
+    uv sync
+    uv run python run.py \
+      --backend daytona \
+      --provider openrouter \
+      --model anthropic/claude-sonnet-4 \
+      --scenario file \
+      --output results.json
+
+- name: Upload results
+  uses: actions/upload-artifact@v4
+  with:
+    name: benchmark-results
+    path: openclawbench/results.json
+```
+
+Key CI behaviors:
+- **Exit code 1** if any task fails (CI detects failure automatically)
+- **Sandbox cleanup** guaranteed via try/finally and SIGTERM handler (no leaked Daytona resources)
+- **Env var precedence** — CI secrets override `.env` file values
+- **Structured output** — `--output results.json` produces machine-readable results
+
+### Aggregating results across matrix jobs
+
+Each result JSON includes a `summary` block with run metadata, designed for easy aggregation:
+
+```json
+{
+  "summary": {
+    "provider": "openrouter",
+    "model": "anthropic/claude-sonnet-4",
+    "backend": "daytona",
+    "scenario": "file",
+    "difficulty": "all",
+    "total_tasks": 9,
+    "tasks_passed": 7,
+    "tasks_failed": 2,
+    "overall_accuracy": 77.8,
+    "average_latency": 12.3,
+    "total_tokens": 45000
+  }
+}
+```
+
+To build a comparison table from matrix job artifacts:
+
+```bash
+# Merge all result files into a single summary table
+jq -s '[.[].summary] | sort_by(.provider, .model, .scenario)
+  | .[] | [.provider, .model, .scenario, .tasks_passed, .total_tasks, .overall_accuracy]
+  | @tsv' results-*.json
+```
+
+| Field | Use |
+|-------|-----|
+| `summary.provider` + `summary.model` | Group by model under test |
+| `summary.scenario` | Group by scenario |
+| `summary.overall_accuracy` | Primary metric for comparison |
+| `summary.average_latency` | Performance metric |
+| `summary.total_tokens` | Cost metric |
 
 ## Scenarios
 
@@ -65,17 +177,67 @@ uv run python run.py --all -o results.json
 | `summarize` | 9 | Document summarization, comparison, action item extraction |
 | `github` | 9 | GitHub public API: repo stats, languages, issues, stars |
 | `gmail` | 9 | Local email parsing: counting, filtering, extracting, summarizing |
+| `gog-gmail` | 6 | Real Gmail via [`gog`](https://github.com/steipete/gogcli) CLI (requires auth) |
 | `compound` | 9 | Multi-step tasks combining file operations + web fetching |
 
-## Configuration
+## gog-gmail Setup (Real Gmail)
 
-Configuration via `.env` or environment variables:
+The `gog-gmail` scenario interacts with a real Gmail account via the [`gog`](https://github.com/steipete/gogcli) CLI. Tasks send test emails, label them, and verify the agent can query Gmail correctly. All test data is cleaned up after each run.
 
-```bash
-AGENT_ID=main               # OpenClaw agent to use (default: main)
-TIMEOUT_MULTIPLIER=1.0      # Scale all timeouts (use >1 on slow machines)
-BOT_WORKSPACE_PATH=/tmp/openclaw_benchmark  # Local workspace path
-```
+> **Use a dedicated test Gmail account**, not your personal inbox.
+
+### Parallel runs and isolation
+
+Each run creates a unique Gmail label (`openclawbench-{uuid}`) and scopes all operations — send, search, verify, cleanup — to that label. This means **parallel CI runs against the same Gmail account are safe** and won't interfere with each other.
+
+**Caveats for parallel sweeps:**
+
+- **Gmail API rate limits** — if you sweep many models in parallel (5+), all hitting the same Gmail account, you may get 429 (rate limit) errors from the Gmail API. Consider staggering gog-gmail runs or using `--timeout-multiplier` to give retries more headroom.
+- **Orphaned test data on crash** — if a CI run is killed before teardown (e.g., workflow timeout), test emails and labels remain in the mailbox. Add a periodic cleanup step to your CI:
+  ```bash
+  # Clean up any leftover openclawbench labels and their messages
+  gog gmail labels list | grep openclawbench- | while read label; do
+    gog gmail messages list --label "$label" --format json | \
+      jq -r '.[].id' | xargs -I{} gog gmail trash {}
+    gog gmail labels delete "$label"
+  done
+  ```
+
+### Prerequisites
+
+1. **Install gog**
+
+   ```bash
+   # macOS
+   brew install steipete/tap/gogcli
+
+   # Linux — download from GitHub releases
+   curl -fsSL https://github.com/steipete/gogcli/releases/download/v0.12.0/gogcli_0.12.0_linux_amd64.tar.gz \
+     | tar xz -C /usr/local/bin gog
+   ```
+
+2. **Create OAuth credentials** in the [Google Cloud Console](https://console.cloud.google.com/apis/credentials) → Create Credentials → OAuth client ID → Desktop app → Download JSON.
+
+3. **Authenticate gog**
+
+   ```bash
+   gog auth credentials ~/Downloads/client_secret_XXXXX.json
+   gog auth login   # opens browser for OAuth consent
+   ```
+
+4. **Export refresh token** (needed for Daytona backend)
+
+   ```bash
+   gog auth tokens export your-test@gmail.com --output ~/.gog-token.json
+   ```
+
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `GOG_TEST_EMAIL` | Yes | Gmail address to send test emails to |
+| `GOG_TOKEN_FILE` | Daytona only | Path to exported refresh token (`~/.gog-token.json`) |
+| `GOG_CREDENTIALS_FILE` | No | Path to OAuth client credentials (default: `~/.config/gogcli/credentials.json`) |
 
 ## Project Structure
 
@@ -83,7 +245,8 @@ BOT_WORKSPACE_PATH=/tmp/openclaw_benchmark  # Local workspace path
 openclawbench/
 ├── run.py              # CLI entry point
 ├── task_runner.py      # TaskRunner, LocalBackend, DaytonaBackend
-├── config.py           # Settings (pydantic, from .env)
+├── config.py           # Settings (pydantic-settings, from env/.env)
+├── .env.example        # Template for environment variables
 ├── CLAUDE.md           # Dev notes
 └── tasks/
     ├── file/           # 9 file manipulation tasks
@@ -92,6 +255,7 @@ openclawbench/
     ├── summarize/      # 9 summarization tasks
     ├── github/         # 9 GitHub API tasks
     ├── gmail/          # 9 email parsing tasks
+    ├── gog-gmail/      # 6 Real Gmail tasks via gog CLI
     └── compound/       # 9 multi-step tasks
 ```
 

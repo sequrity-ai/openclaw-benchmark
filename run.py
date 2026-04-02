@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Harbor-native benchmark runner CLI.
+"""OpenClawBench — benchmark runner CLI.
 
 Usage:
     python run.py --scenario file --backend local
-    python run.py --scenario file --backend daytona
+    python run.py --scenario file --backend daytona --provider openrouter --model anthropic/claude-sonnet-4
     python run.py --scenario all --difficulty easy
     python run.py --task tasks/file/file-organization
     python run.py --list
@@ -14,6 +14,7 @@ import argparse
 import asyncio
 import contextlib
 import logging
+import signal
 import subprocess
 import sys
 import time
@@ -21,9 +22,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()
+# Load .env into os.environ for variables not modeled in BenchmarkConfig
+# (e.g. GOG_TEST_EMAIL, GOG_TOKEN_FILE, provider API keys).
+# override=False ensures real env vars (from CI) take precedence over .env.
+load_dotenv(override=False)
 
-from config import TelegramConfig, load_config
+from config import BenchmarkConfig, load_config
 from task_runner import (
     DaytonaBackend,
     LocalBackend,
@@ -37,7 +41,20 @@ TASKS_DIR = Path(__file__).parent / "tasks"
 
 logger = logging.getLogger(__name__)
 
-GATEWAY_PORT = 18789
+# Module-level reference for signal handler cleanup
+_active_backend = None
+
+
+def _cleanup_handler(signum, frame):
+    """Best-effort sandbox cleanup on SIGTERM/SIGINT."""
+    sig_name = signal.Signals(signum).name
+    logger.warning(f"Received {sig_name}, cleaning up...")
+    if _active_backend is not None and hasattr(_active_backend, "destroy"):
+        try:
+            _active_backend.destroy()
+        except Exception as e:
+            logger.error(f"Cleanup on {sig_name} failed: {e}")
+    sys.exit(128 + signum)
 
 
 def _gateway_running() -> bool:
@@ -99,14 +116,19 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 def create_backend(
-    backend_name: str, config: TelegramConfig, provider: str = "sequrity", model: str = "gpt-5.2"
+    backend_name: str, config: BenchmarkConfig, provider: str = "sequrity", model: str = "gpt-5.2"
 ):
     """Create the appropriate workspace backend."""
     if backend_name == "local":
+        if provider != "sequrity" or model != "gpt-5.2":
+            raise NotImplementedError(
+                "--provider/--model are not supported with --backend=local; "
+                "configure the provider in ~/.openclaw/openclaw.json instead"
+            )
         return LocalBackend(config.bot_workspace_path)
     elif backend_name == "daytona":
         if not config.daytona_api_key:
-            print("ERROR: Daytona backend requires DAYTONA_API_KEY in .env")
+            logger.error("Daytona backend requires DAYTONA_API_KEY")
             sys.exit(1)
         return DaytonaBackend(
             api_key=config.daytona_api_key,
@@ -114,9 +136,10 @@ def create_backend(
             image=config.daytona_image,
             provider=provider,
             model=model,
+            gateway_port=config.gateway_port,
         )
     else:
-        print(f"ERROR: Unknown backend: {backend_name}")
+        logger.error(f"Unknown backend: {backend_name}")
         sys.exit(1)
 
 
@@ -136,11 +159,10 @@ def list_tasks(tasks: list[TaskSpec]) -> None:
     print(f"\nTotal: {len(tasks)} tasks")
 
 
-def verify_solutions(tasks: list[TaskSpec]) -> None:
+def verify_solutions(tasks: list[TaskSpec], config: BenchmarkConfig) -> None:
     """Run reference solutions against test harnesses to verify correctness."""
-    from task_runner import LocalBackend
-
-    backend = LocalBackend("/tmp/openclaw_verify")
+    verify_path = config.bot_workspace_path + "_verify"
+    backend = LocalBackend(verify_path)
     passed = 0
     failed = 0
 
@@ -177,16 +199,18 @@ def verify_solutions(tasks: list[TaskSpec]) -> None:
         sys.exit(1)
 
 
-async def run_bench(args, config: TelegramConfig) -> None:
-    """Run benchmark tasks."""
+async def run_bench(args, config: BenchmarkConfig) -> "SuiteResult":
+    """Run benchmark tasks. Returns SuiteResult for exit code handling."""
+    global _active_backend
+
+    from task_runner import SuiteResult
+
     # Discover tasks
     if args.task:
-        # Single task by path
         task_path = Path(args.task)
         if not task_path.exists():
-            print(f"ERROR: Task path not found: {task_path}")
+            logger.error(f"Task path not found: {task_path}")
             sys.exit(1)
-        # Determine scenario from parent dir
         scenario_name = task_path.parent.name
         tasks = discover_tasks(
             task_path.parent.parent, scenario=scenario_name, task_name=task_path.name
@@ -199,7 +223,7 @@ async def run_bench(args, config: TelegramConfig) -> None:
         )
 
     if not tasks:
-        print("No tasks found matching filters.")
+        logger.error("No tasks found matching filters.")
         sys.exit(1)
 
     provider = args.provider or "sequrity"
@@ -213,19 +237,32 @@ async def run_bench(args, config: TelegramConfig) -> None:
 
     # Create backend and runner
     backend = create_backend(args.backend, config, provider=provider, model=model)
-    runner = TaskRunner(
-        backend=backend,
-        agent_id=config.agent_id,
-        timeout_multiplier=config.timeout_multiplier,
-    )
+    _active_backend = backend  # for signal handler
 
-    # Run suite (gateway must be up for local backend exec tool calls;
-    # daytona runs openclaw inside the workspace, so no local gateway needed)
-    if args.backend == "daytona":
-        suite = await runner.run_suite(tasks, scenario_name=scenario_label)
-    else:
-        with ensure_gateway():
+    try:
+        runner = TaskRunner(
+            backend=backend,
+            agent_id=config.agent_id,
+            timeout_multiplier=config.timeout_multiplier,
+        )
+
+        # Run suite (gateway must be up for local backend exec tool calls;
+        # daytona runs openclaw inside the workspace, so no local gateway needed)
+        if args.backend == "daytona":
             suite = await runner.run_suite(tasks, scenario_name=scenario_label)
+        else:
+            with ensure_gateway():
+                suite = await runner.run_suite(tasks, scenario_name=scenario_label)
+    finally:
+        _active_backend = None
+
+    # Attach run metadata for aggregation across CI matrix jobs
+    suite.metadata = {
+        "provider": provider,
+        "model": model,
+        "backend": args.backend,
+        "difficulty": args.difficulty or "all",
+    }
 
     # Print summary
     print("\n" + "=" * 60)
@@ -248,6 +285,8 @@ async def run_bench(args, config: TelegramConfig) -> None:
         output_path = Path(args.output)
         export_results(suite, output_path)
         print(f"\nResults exported to {output_path}")
+
+    return suite
 
 
 def main():
@@ -281,13 +320,13 @@ def main():
         "--provider",
         "-p",
         default=None,
-        help="LLM provider for Daytona backend (e.g. sequrity, openai, anthropic, google). Default: sequrity",
+        help="LLM provider for Daytona backend (e.g. sequrity, openai, anthropic, openrouter). Default: sequrity",
     )
     parser.add_argument(
         "--model",
         "-m",
         default=None,
-        help="Model ID for Daytona backend (e.g. gpt-5.2, claude-sonnet-4-6, gpt-5.4). Default: gpt-5.2",
+        help="Model ID for Daytona backend (e.g. gpt-5.2, claude-sonnet-4-6). Default: gpt-5.2",
     )
     parser.add_argument(
         "--task",
@@ -310,6 +349,23 @@ def main():
         help="Verify reference solutions pass all tests",
     )
     parser.add_argument(
+        "--timeout-multiplier",
+        type=float,
+        default=None,
+        help="Multiply all task timeouts by this factor (env: TIMEOUT_MULTIPLIER)",
+    )
+    parser.add_argument(
+        "--agent-id",
+        default=None,
+        help="OpenClaw agent ID (env: AGENT_ID, default: main)",
+    )
+    parser.add_argument(
+        "--gateway-port",
+        type=int,
+        default=None,
+        help="openclaw gateway port (env: GATEWAY_PORT, default: 18789)",
+    )
+    parser.add_argument(
         "-v",
         "--verbose",
         action="store_true",
@@ -320,7 +376,17 @@ def main():
     if args.all:
         args.scenario = "all"
     setup_logging(args.verbose)
-    config = load_config()
+
+    # Load config: env/.env first, then CLI overrides win
+    config = load_config(
+        timeout_multiplier=args.timeout_multiplier,
+        agent_id=args.agent_id,
+        gateway_port=args.gateway_port,
+    )
+
+    # Install signal handlers for clean shutdown
+    signal.signal(signal.SIGTERM, _cleanup_handler)
+    signal.signal(signal.SIGINT, _cleanup_handler)
 
     if args.list:
         tasks = discover_tasks(TASKS_DIR, scenario=args.scenario, difficulty=args.difficulty)
@@ -330,10 +396,14 @@ def main():
     if args.verify_only:
         tasks = discover_tasks(TASKS_DIR, scenario=args.scenario, difficulty=args.difficulty)
         print(f"Verifying {len(tasks)} task(s)...")
-        verify_solutions(tasks)
+        verify_solutions(tasks, config)
         return
 
-    asyncio.run(run_bench(args, config))
+    suite = asyncio.run(run_bench(args, config))
+
+    # Exit non-zero if any task failed
+    if not suite.all_tasks_passed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
