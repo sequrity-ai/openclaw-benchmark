@@ -1187,9 +1187,15 @@ class TaskRunner:
             logger.info(f"[{run_id}] Setting up workspace...")
             self.backend.setup_workspace(task)
 
-            # 2. Clear stale locks (local only)
+            # 2. Clear stale locks and reset memory file (local only)
             if isinstance(self.backend, LocalBackend):
                 _clear_stale_session_locks(self.agent_id)
+                # Reset daily memory file so no stale context leaks between tasks
+                memory_dir = os.path.expanduser("~/.openclaw/workspace/memory")
+                os.makedirs(memory_dir, exist_ok=True)
+                today = time.strftime("%Y-%m-%d")
+                for mem_file in [f"{today}.md", f"{time.strftime('%Y-%m-%d', time.gmtime(time.time() - 86400))}.md"]:
+                    open(os.path.join(memory_dir, mem_file), "w").close()
 
             # 3. Build prompt — replace /workspace with actual path for local backend
             prompt = task.instruction
